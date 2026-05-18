@@ -18,7 +18,7 @@ local_texts:
 max_samples: 2048
 sequence_length: 128
 batch_size: 4
-shuffle: true
+shuffle: false
 num_workers: 0
 pin_memory: false
 persistent_workers: false

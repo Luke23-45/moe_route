@@ -13,7 +13,7 @@ rebuild_cache: false
 text_field: text
 max_samples: null
 sequence_length: 256
-batch_size: 256
+batch_size: 384
 shuffle: false
 num_workers: 2
 pin_memory: true

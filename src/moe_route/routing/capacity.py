@@ -24,18 +24,20 @@ class CapacityPolicy:
         flat = expert_indices.reshape(-1)
         device = flat.device
         capacity = self.capacity(expert_indices.shape[0], device)
-        raw_load = torch.zeros(self.num_experts, dtype=torch.long, device=device)
-        valid = torch.ones_like(flat, dtype=torch.bool)
+        
+        # SOTA Fused Capacity Enforcement (No Graph Breaks)
+        one_hot = torch.nn.functional.one_hot(flat, num_classes=self.num_experts)
+        raw_load = one_hot.sum(dim=0)
 
-        raw_load.scatter_add_(0, flat, torch.ones_like(flat, dtype=torch.long))
         if self.drop_tokens:
-            for expert in range(self.num_experts):
-                positions = torch.nonzero(flat == expert, as_tuple=False).flatten()
-                overflow = positions[capacity[expert] :]
-                valid[overflow] = False
+            expert_token_ranks = torch.cumsum(one_hot, dim=0) - 1
+            token_ranks = expert_token_ranks.gather(1, flat.unsqueeze(1)).squeeze(1)
+            token_capacity = capacity.gather(0, flat)
+            valid = token_ranks < token_capacity
+        else:
+            valid = torch.ones_like(flat, dtype=torch.bool)
 
-        accepted = torch.zeros(self.num_experts, dtype=torch.long, device=device)
-        if valid.any():
-            accepted.scatter_add_(0, flat[valid], torch.ones_like(flat[valid], dtype=torch.long))
+        accepted = (one_hot * valid.unsqueeze(1).long()).sum(dim=0)
         overflow = (raw_load - capacity).clamp_min(0)
+        
         return valid.reshape_as(expert_indices), accepted, raw_load, overflow

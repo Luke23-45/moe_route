@@ -46,9 +46,8 @@ class MoEFeedForward(nn.Module):
         for expert_id, expert in enumerate(self.experts):
             for slot in range(route.expert_indices.shape[1]):
                 mask = (route.expert_indices[:, slot] == expert_id) & route.dispatch_mask[:, slot]
-                if mask.any():
-                    expert_out = expert(flat[mask])
-                    output[mask] += expert_out * route.combine_weights[mask, slot].unsqueeze(-1)
+                expert_out = expert(flat[mask])
+                output[mask] += expert_out * route.combine_weights[mask, slot].unsqueeze(-1)
 
         self.last_diagnostics = route.diagnostics
         return output.reshape(original_shape), route.diagnostics.aux_loss
