@@ -15,7 +15,7 @@ max_samples: null
 sequence_length: 256
 batch_size: 16
 shuffle: true
-num_workers: 4
+num_workers: 2
 pin_memory: true
 persistent_workers: true
 prefetch_factor: 2

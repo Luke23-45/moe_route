@@ -4,7 +4,7 @@ max_steps: 1000000
 grad_accum_steps: 1
 precision: bf16
 clip_grad_norm: 1.0
-compile: false
+compile: true
 log_every: 10
 eval_every: 0
 checkpoint_every: 1000

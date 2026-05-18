@@ -37,9 +37,14 @@ class CausalSelfAttention(nn.Module):
         self.head_dim = d_model // n_heads
         self.qkv = nn.Linear(d_model, 3 * d_model)
         self.proj = nn.Linear(d_model, d_model)
-        self.dropout = nn.Dropout(dropout)
-        mask = torch.tril(torch.ones(max_seq_len, max_seq_len, dtype=torch.bool))
-        self.register_buffer("causal_mask", mask, persistent=False)
+        self.dropout_p = dropout
+        
+        # Precompute RoPE frequencies
+        freqs = 1.0 / (10000.0 ** (torch.arange(0, self.head_dim, 2)[: (self.head_dim // 2)].float() / self.head_dim))
+        t = torch.arange(max_seq_len, dtype=torch.float32)
+        freqs = torch.outer(t, freqs)
+        freqs_cis = torch.polar(torch.ones_like(freqs), freqs)
+        self.register_buffer("freqs_cis", freqs_cis, persistent=False)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         batch, seq_len, width = x.shape
@@ -48,11 +53,21 @@ class CausalSelfAttention(nn.Module):
         q = q.transpose(1, 2)
         k = k.transpose(1, 2)
         v = v.transpose(1, 2)
-        att = (q @ k.transpose(-2, -1)) / math.sqrt(self.head_dim)
-        att = att.masked_fill(~self.causal_mask[:seq_len, :seq_len], float("-inf"))
-        weights = F.softmax(att, dim=-1)
-        weights = self.dropout(weights)
-        y = weights @ v
+        
+        # Apply RoPE
+        q_ = torch.view_as_complex(q.float().reshape(*q.shape[:-1], -1, 2))
+        k_ = torch.view_as_complex(k.float().reshape(*k.shape[:-1], -1, 2))
+        freqs_cis = self.freqs_cis[:seq_len].view(1, 1, seq_len, -1)
+        q = torch.view_as_real(q_ * freqs_cis).flatten(3).type_as(q)
+        k = torch.view_as_real(k_ * freqs_cis).flatten(3).type_as(k)
+        
+        # Flash Attention
+        y = F.scaled_dot_product_attention(
+            q, k, v,
+            dropout_p=self.dropout_p if self.training else 0.0,
+            is_causal=True
+        )
+        
         y = y.transpose(1, 2).contiguous().view(batch, seq_len, width)
         return self.proj(y)
 
@@ -91,7 +106,6 @@ class DecoderOnlyLM(nn.Module):
         super().__init__()
         self.cfg = cfg
         self.token_emb = nn.Embedding(cfg.vocab_size, cfg.d_model)
-        self.pos_emb = nn.Embedding(cfg.max_seq_len, cfg.d_model)
         self.drop = nn.Dropout(cfg.dropout)
         self.blocks = nn.ModuleList([TransformerBlock(cfg, i) for i in range(cfg.n_layers)])
         self.ln_f = nn.LayerNorm(cfg.d_model)
@@ -104,8 +118,7 @@ class DecoderOnlyLM(nn.Module):
         batch, seq_len = input_ids.shape
         if seq_len > self.cfg.max_seq_len:
             raise ValueError(f"Sequence length {seq_len} exceeds max_seq_len {self.cfg.max_seq_len}.")
-        pos = torch.arange(seq_len, device=input_ids.device)
-        x = self.token_emb(input_ids) + self.pos_emb(pos).unsqueeze(0)
+        x = self.token_emb(input_ids)
         x = self.drop(x)
         aux_loss = torch.zeros((), device=input_ids.device)
         for block in self.blocks:

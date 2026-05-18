@@ -45,11 +45,48 @@ def train(cfg) -> Path | None:
     seed_everything(int(cfg.seed))
     ctx = init_distributed(cfg)
     run_dir = Path(cfg.artifact_dir) / "runs" / str(cfg.run_name)
+    
+    # --- Robust Hardware Checks for SOTA Optimizations ---
+    precision = str(cfg.trainer.get("precision", "fp32"))
+    compile_enabled = bool(cfg.trainer.get("compile", False))
+
+    if ctx.device.type == "cuda":
+        if precision == "bf16" and not torch.cuda.is_bf16_supported():
+            if ctx.is_main:
+                print("[train] WARNING: bfloat16 is not supported by this GPU. Falling back to fp16.")
+            precision = "fp16"
+        
+        if compile_enabled:
+            capability = torch.cuda.get_device_capability()
+            if capability[0] < 7:
+                if ctx.is_main:
+                    print(f"[train] WARNING: torch.compile requires GPU compute capability >= 7.0 (found {capability}). Disabling compile.")
+                compile_enabled = False
+    else:
+        if precision == "fp16":
+            if ctx.is_main:
+                print("[train] WARNING: CPU autocast strictly supports bfloat16. Switching fp16 to bf16.")
+            precision = "bf16"
+        if precision == "fp32":
+            precision = "bf16"
+        if compile_enabled:
+            if ctx.is_main:
+                print("[train] WARNING: torch.compile requires CUDA. Disabling compile.")
+            compile_enabled = False
+            
+    try:
+        OmegaConf.update(cfg, "trainer.precision", precision, force_add=True)
+        OmegaConf.update(cfg, "trainer.compile", compile_enabled, force_add=True)
+    except Exception:
+        cfg.trainer.precision = precision
+        cfg.trainer.compile = compile_enabled
+    # -----------------------------------------------------
+
     if ctx.is_main:
         write_run_metadata(run_dir, cfg)
         print(
             f"[train] run={cfg.run_name} device={ctx.device} world_size={ctx.world_size} "
-            f"precision={cfg.trainer.precision}"
+            f"precision={precision} compile={compile_enabled}"
         )
         if ctx.device.type != "cuda":
             print(
@@ -73,7 +110,7 @@ def train(cfg) -> Path | None:
         prepare=not bool(cfg.data.get("cache_tokenized", False)),
     )
     model = DecoderOnlyLM(build_model_cfg(cfg)).to(ctx.device)
-    if bool(cfg.trainer.compile):
+    if compile_enabled:
         model = torch.compile(model)
     model = wrap_model(model, ctx, bool(cfg.distributed.find_unused_parameters))
     optimizer = build_optimizer(model.parameters(), cfg)
@@ -96,9 +133,9 @@ def train(cfg) -> Path | None:
         if configured_epochs is not None
         else max((max_steps + steps_per_epoch - 1) // steps_per_epoch, 1)
     )
-    use_amp = str(cfg.trainer.precision) in {"bf16", "fp16"} and ctx.device.type == "cuda"
-    amp_dtype = torch.bfloat16 if str(cfg.trainer.precision) == "bf16" else torch.float16
-    scaler = torch.amp.GradScaler("cuda", enabled=use_amp and amp_dtype is torch.float16)
+    use_amp = precision in {"bf16", "fp16"}
+    amp_dtype = torch.bfloat16 if precision == "bf16" else torch.float16
+    scaler = torch.amp.GradScaler("cuda", enabled=use_amp and amp_dtype is torch.float16 and ctx.device.type == "cuda")
     last_ckpt: Path | None = None
     started = time.perf_counter()
 

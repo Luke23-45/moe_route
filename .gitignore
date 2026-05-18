@@ -15,4 +15,5 @@ mlruns/
 *.safetensors
 data/cache/
 
+logs.md
 errors.md
