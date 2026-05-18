@@ -41,13 +41,39 @@ class MoEFeedForward(nn.Module):
         original_shape = x.shape
         flat = x.reshape(-1, original_shape[-1])
         route = self.router(flat)
-        output = torch.zeros_like(flat)
+
+        num_tokens, top_k = route.expert_indices.shape
+        flat_indices = route.expert_indices.view(-1)
+        flat_mask = route.dispatch_mask.view(-1)
+        token_ranks = route.token_ranks.view(-1)
+
+        cap = route.diagnostics.capacity[0].item()
+        num_experts = len(self.experts)
+
+        dummy_idx = num_experts * (cap + 1) - 1
+        safe_token_ranks = token_ranks.clamp(max=cap)
+        flat_buffer_idx = torch.where(
+            flat_mask,
+            flat_indices * (cap + 1) + safe_token_ranks,
+            torch.full_like(flat_indices, dummy_idx)
+        )
+
+        flat_buffer = torch.zeros(num_experts * (cap + 1), flat.shape[-1], dtype=flat.dtype, device=flat.device)
+        flat_buffer.index_add_(0, flat_buffer_idx, flat.repeat_interleave(top_k, dim=0))
+
+        buffer = flat_buffer.view(num_experts, cap + 1, flat.shape[-1])
+        buffer_out = torch.zeros_like(buffer)
 
         for expert_id, expert in enumerate(self.experts):
-            for slot in range(route.expert_indices.shape[1]):
-                mask = (route.expert_indices[:, slot] == expert_id) & route.dispatch_mask[:, slot]
-                expert_out = expert(flat[mask])
-                output[mask] += expert_out * route.combine_weights[mask, slot].unsqueeze(-1)
+            buffer_out[expert_id, :cap] = expert(buffer[expert_id, :cap])
+
+        flat_buffer_out = buffer_out.view(num_experts * (cap + 1), flat.shape[-1])
+        expert_out = flat_buffer_out.index_select(0, flat_buffer_idx)
+
+        weights = route.combine_weights.view(-1) * flat_mask.to(flat.dtype)
+        expert_out = expert_out * weights.unsqueeze(-1)
+
+        output = expert_out.view(num_tokens, top_k, flat.shape[-1]).sum(dim=1)
 
         self.last_diagnostics = route.diagnostics
         return output.reshape(original_shape), route.diagnostics.aux_loss

@@ -62,7 +62,7 @@ class TopKRouter(Router):
         weights, indices = torch.topk(probs, k=self.cfg.top_k, dim=-1)
         weights = weights / weights.sum(dim=-1, keepdim=True).clamp_min(1e-8)
 
-        dispatch_mask, load, raw_load, overflow = self.capacity.enforce(indices)
+        dispatch_mask, load, raw_load, overflow, token_ranks = self.capacity.enforce(indices)
         weights = weights * dispatch_mask.to(weights.dtype)
         denom = weights.sum(dim=-1, keepdim=True)
         weights = torch.where(denom > 0, weights / denom.clamp_min(1e-8), weights)
@@ -90,7 +90,7 @@ class TopKRouter(Router):
             capacity_utilization=load.float().sum() / capacity.float().sum().clamp_min(1.0),
             matched_compute_fraction=accepted_assignments / requested_assignments,
         )
-        return RoutingResult(indices, weights, dispatch_mask, diagnostics)
+        return RoutingResult(indices, weights, dispatch_mask, token_ranks, diagnostics)
 
 
 class ReflectedRouter(TopKRouter):

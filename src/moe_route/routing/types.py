@@ -28,4 +28,5 @@ class RoutingResult:
     expert_indices: torch.Tensor
     combine_weights: torch.Tensor
     dispatch_mask: torch.Tensor
+    token_ranks: torch.Tensor
     diagnostics: RoutingDiagnostics

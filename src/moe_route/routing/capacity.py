@@ -19,8 +19,8 @@ class CapacityPolicy:
 
     def enforce(
         self, expert_indices: torch.Tensor
-    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
-        """Return valid dispatch mask, accepted load, raw selected load, and overflow counts."""
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        """Return valid dispatch mask, accepted load, raw selected load, overflow counts, and token ranks."""
         flat = expert_indices.reshape(-1)
         device = flat.device
         capacity = self.capacity(expert_indices.shape[0], device)
@@ -35,9 +35,11 @@ class CapacityPolicy:
             token_capacity = capacity.gather(0, flat)
             valid = token_ranks < token_capacity
         else:
+            expert_token_ranks = torch.cumsum(one_hot, dim=0) - 1
+            token_ranks = expert_token_ranks.gather(1, flat.unsqueeze(1)).squeeze(1)
             valid = torch.ones_like(flat, dtype=torch.bool)
 
         accepted = (one_hot * valid.unsqueeze(1).long()).sum(dim=0)
         overflow = (raw_load - capacity).clamp_min(0)
         
-        return valid.reshape_as(expert_indices), accepted, raw_load, overflow
+        return valid.reshape_as(expert_indices), accepted, raw_load, overflow, token_ranks.reshape_as(expert_indices)
