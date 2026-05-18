@@ -36,6 +36,8 @@ def _routing_metrics(model: torch.nn.Module) -> dict[str, float]:
         metrics[f"{prefix}/matched_compute_fraction"] = float(
             diag.matched_compute_fraction.detach().cpu()
         )
+        if diag.z_loss is not None:
+            metrics[f"{prefix}/z_loss"] = float(diag.z_loss.detach().cpu())
         if diag.pressure is not None:
             metrics[f"{prefix}/pressure_mean"] = float(diag.pressure.float().mean().detach().cpu())
     return metrics
@@ -202,6 +204,18 @@ def train(cfg) -> Path | None:
                         if "router/0/matched_compute_fraction" in routing_metrics:
                             postfix["compute"] = (
                                 f"{routing_metrics['router/0/matched_compute_fraction']:.2f}"
+                            )
+                        if "router/0/drop_rate" in routing_metrics:
+                            postfix["drop"] = (
+                                f"{routing_metrics['router/0/drop_rate']:.3f}"
+                            )
+                        if "router/0/capacity_utilization" in routing_metrics:
+                            postfix["cap"] = (
+                                f"{routing_metrics['router/0/capacity_utilization']:.2f}"
+                            )
+                        if "router/0/entropy" in routing_metrics:
+                            postfix["entropy"] = (
+                                f"{routing_metrics['router/0/entropy']:.2f}"
                             )
                         progress.set_postfix(postfix, refresh=False)
                         progress.update(1)

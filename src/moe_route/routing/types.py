@@ -19,6 +19,7 @@ class RoutingDiagnostics:
     aux_loss: torch.Tensor
     capacity_utilization: torch.Tensor
     matched_compute_fraction: torch.Tensor
+    z_loss: torch.Tensor | None = None
     pressure: torch.Tensor | None = None
     extra: dict[str, torch.Tensor] = field(default_factory=dict)
 

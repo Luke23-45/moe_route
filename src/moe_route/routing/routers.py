@@ -21,6 +21,7 @@ class RouterConfig:
     capacity_factor: float = 1.25
     drop_tokens: bool = True
     aux_loss_weight: float = 0.01
+    z_loss_weight: float = 0.001
     pressure_lr: float = 0.05
     pressure_alpha: float = 1.0
     pressure_beta: float = 1.0
@@ -70,9 +71,14 @@ class TopKRouter(Router):
         load_fraction = load.float() / load.sum().clamp_min(1)
         raw_load_fraction = raw_load.float() / raw_load.sum().clamp_min(1)
         mean_probs = probs.mean(dim=0)
+        
+        # SOTA Z-Loss to penalize large logits
+        z_loss = self.cfg.z_loss_weight * (torch.logsumexp(logits, dim=-1) ** 2).mean()
+        
         aux_loss = self.cfg.aux_loss_weight * self.cfg.num_experts * (
             mean_probs * raw_load_fraction
-        ).sum()
+        ).sum() + z_loss
+        
         capacity = self.capacity.capacity(x.shape[0], x.device)
         accepted_assignments = load.sum().float()
         requested_assignments = raw_load.sum().float().clamp_min(1.0)
@@ -89,6 +95,7 @@ class TopKRouter(Router):
             aux_loss=aux_loss,
             capacity_utilization=load.float().sum() / capacity.float().sum().clamp_min(1.0),
             matched_compute_fraction=accepted_assignments / requested_assignments,
+            z_loss=z_loss,
         )
         return RoutingResult(indices, weights, dispatch_mask, token_ranks, diagnostics)
 
