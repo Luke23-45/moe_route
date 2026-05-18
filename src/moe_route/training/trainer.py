@@ -241,6 +241,19 @@ def train(cfg) -> Path | None:
             finally:
                 if progress is not None:
                     progress.close()
+
+        # Save the final checkpoint if it wasn't saved perfectly on the modulo boundary
+        if ctx.is_main and int(cfg.trainer.checkpoint_every) > 0 and step % int(cfg.trainer.checkpoint_every) != 0:
+            last_ckpt = save_checkpoint(
+                Path(cfg.trainer.save_dir) / f"step_{step}.pt",
+                model,
+                optimizer,
+                scheduler,
+                step,
+                OmegaConf.to_container(cfg, resolve=True),
+            )
+            if tracker is not None:
+                tracker.log_artifact(last_ckpt)
     finally:
         if tracker is not None:
             tracker.close()
