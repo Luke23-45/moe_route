@@ -7,7 +7,7 @@ clip_grad_norm: 1.0
 compile: true
 log_every: 10
 eval_every: 0
-checkpoint_every: 5000
+checkpoint_every: 4000
 save_dir: artifacts/checkpoints/tinystories
 resume_from: null
 prepare_data: true
