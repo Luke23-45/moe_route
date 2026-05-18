@@ -1,15 +1,17 @@
 from __future__ import annotations
 
+from abc import ABC, abstractmethod
 from collections.abc import Iterable, Iterator
 from dataclasses import dataclass
 
 
 @dataclass(frozen=True)
-class CorpusAdapter:
+class CorpusAdapter(ABC):
     name: str
 
-    def texts(self) -> Iterable[str]:  # pragma: no cover - interface
-        raise NotImplementedError
+    @abstractmethod
+    def texts(self) -> Iterable[str]:
+        """Yield normalized text records for tokenization."""
 
 
 @dataclass(frozen=True)

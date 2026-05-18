@@ -35,6 +35,5 @@ def evaluate_perplexity(cfg, checkpoint: str | Path | None = None) -> dict[str, 
 
 
 def load_cfg_from_checkpoint(checkpoint: str | Path):
-    payload = torch.load(checkpoint, map_location="cpu")
+    payload = torch.load(checkpoint, map_location="cpu", weights_only=False)
     return OmegaConf.create(payload["config"])
-

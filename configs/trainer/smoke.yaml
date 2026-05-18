@@ -1,4 +1,5 @@
 name: smoke
+max_epochs: null
 max_steps: 5
 grad_accum_steps: 1
 precision: fp32
@@ -9,4 +10,9 @@ eval_every: 0
 checkpoint_every: 5
 save_dir: artifacts/checkpoints
 resume_from: null
-
+prepare_data: true
+progress:
+  enabled: true
+  dynamic_ncols: true
+  leave: true
+  mininterval: 0.5

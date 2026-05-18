@@ -1,4 +1,10 @@
 name: ppl
 max_batches: 10
 tasks: []
-
+task_adapter:
+  backend: lm_eval
+  model: hf
+  model_args: ""
+  batch_size: auto
+  limit: null
+  output_path: artifacts/eval_tasks/results.json

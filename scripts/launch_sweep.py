@@ -1,16 +1,23 @@
 from __future__ import annotations
 
 import argparse
-import subprocess
-import sys
+
+from _runner import (
+    add_common_config_args,
+    module_cmd,
+    overrides_from_args,
+    run_command,
+    validate_override_syntax,
+)
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Cross-platform Hydra sweep launcher.")
-    parser.add_argument("overrides", nargs="*")
+    add_common_config_args(parser)
     args = parser.parse_args()
-    cmd = [sys.executable, "-m", "moe_route.cli.sweep", "--multirun", *args.overrides]
-    raise SystemExit(subprocess.call(cmd))
+    overrides = ["--multirun", *overrides_from_args(args)]
+    validate_override_syntax([item for item in overrides if item != "--multirun"])
+    raise SystemExit(run_command(module_cmd("moe_route.cli.sweep", overrides), args.dry_run))
 
 
 if __name__ == "__main__":

@@ -40,7 +40,7 @@ def save_checkpoint(
 
 
 def load_checkpoint(path: str | Path, model: nn.Module, optimizer: Optimizer | None = None, scheduler=None) -> int:
-    payload = torch.load(path, map_location="cpu")
+    payload = torch.load(path, map_location="cpu", weights_only=False)
     raw_model = unwrap_model(model)
     raw_model.load_state_dict(payload["model"])
     if payload.get("pressure") is not None and hasattr(raw_model, "load_pressure_state_dict"):
@@ -49,5 +49,9 @@ def load_checkpoint(path: str | Path, model: nn.Module, optimizer: Optimizer | N
         optimizer.load_state_dict(payload["optimizer"])
     if scheduler is not None and payload.get("scheduler") is not None:
         scheduler.load_state_dict(payload["scheduler"])
+    rng = payload.get("rng")
+    if isinstance(rng, dict) and rng.get("torch") is not None:
+        torch.set_rng_state(rng["torch"])
+        if torch.cuda.is_available() and rng.get("cuda"):
+            torch.cuda.set_rng_state_all(rng["cuda"])
     return int(payload.get("step", 0))
-

@@ -1,10 +1,15 @@
 name: tinystories_smoke
 adapter: tiny_text
+root_dir: artifacts/data/tinystories_smoke
+raw_dir: artifacts/data/tinystories_smoke/raw
+prepared_dir: artifacts/data/tinystories_smoke/prepared
 dataset_name: roneneldan/TinyStories
 dataset_config: null
 split: train
 streaming: false
-cache_dir: artifacts/cache/tinystories
+cache_dir: artifacts/data/tinystories_smoke/cache
+cache_tokenized: true
+rebuild_cache: false
 text_field: text
 local_texts:
   - "Once there was a small cat who learned to share."
@@ -18,4 +23,3 @@ num_workers: 0
 pin_memory: false
 persistent_workers: false
 prefetch_factor: null
-

@@ -1,10 +1,15 @@
 name: fineweb_10bt
 adapter: huggingface
+root_dir: artifacts/data/fineweb_10bt
+raw_dir: artifacts/data/fineweb_10bt/raw
+prepared_dir: artifacts/data/fineweb_10bt/prepared
 dataset_name: HuggingFaceFW/fineweb
 dataset_config: sample-10BT
 split: train
 streaming: false
-cache_dir: artifacts/cache/fineweb_10bt
+cache_dir: artifacts/data/fineweb_10bt/hf_cache
+cache_tokenized: true
+rebuild_cache: false
 text_field: text
 max_samples: null
 sequence_length: 1024
@@ -14,4 +19,3 @@ num_workers: 4
 pin_memory: true
 persistent_workers: true
 prefetch_factor: 2
-

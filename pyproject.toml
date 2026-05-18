@@ -25,6 +25,7 @@ lm-eval = ["lm-eval>=0.4"]
 
 [project.scripts]
 moe-route-train = "moe_route.cli.train:main"
+moe-route-prepare-data = "moe_route.cli.prepare_data:main"
 moe-route-eval-ppl = "moe_route.cli.eval_ppl:main"
 moe-route-eval-tasks = "moe_route.cli.eval_tasks:main"
 moe-route-analyze-routing = "moe_route.cli.analyze_routing:main"
@@ -50,4 +51,3 @@ src = ["src", "tests", "scripts"]
 [tool.ruff.lint]
 select = ["E", "F", "I", "B", "UP", "SIM"]
 ignore = ["E501"]
-

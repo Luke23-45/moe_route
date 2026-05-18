@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from abc import ABC, abstractmethod
 from dataclasses import dataclass
 
 import torch
@@ -27,14 +28,16 @@ class RouterConfig:
     pressure_decay: float = 0.0
 
 
-class Router(nn.Module):
-    def forward(self, x: torch.Tensor) -> RoutingResult:  # pragma: no cover - interface
-        raise NotImplementedError
+class Router(nn.Module, ABC):
+    @abstractmethod
+    def forward(self, x: torch.Tensor) -> RoutingResult:
+        """Route flattened token representations to experts."""
 
     def pressure_state_dict(self) -> dict[str, torch.Tensor] | None:
         return None
 
     def load_pressure_state_dict(self, state: dict[str, torch.Tensor] | None) -> None:
+        _ = state
         return None
 
 
@@ -59,22 +62,33 @@ class TopKRouter(Router):
         weights, indices = torch.topk(probs, k=self.cfg.top_k, dim=-1)
         weights = weights / weights.sum(dim=-1, keepdim=True).clamp_min(1e-8)
 
-        dispatch_mask, load, overflow = self.capacity.enforce(indices)
+        dispatch_mask, load, raw_load, overflow = self.capacity.enforce(indices)
         weights = weights * dispatch_mask.to(weights.dtype)
-        denom = weights.sum(dim=-1, keepdim=True).clamp_min(1e-8)
-        weights = torch.where(denom > 0, weights / denom, weights)
+        denom = weights.sum(dim=-1, keepdim=True)
+        weights = torch.where(denom > 0, weights / denom.clamp_min(1e-8), weights)
 
         load_fraction = load.float() / load.sum().clamp_min(1)
+        raw_load_fraction = raw_load.float() / raw_load.sum().clamp_min(1)
         mean_probs = probs.mean(dim=0)
-        aux_loss = self.cfg.aux_loss_weight * self.cfg.num_experts * (mean_probs * load_fraction).sum()
+        aux_loss = self.cfg.aux_loss_weight * self.cfg.num_experts * (
+            mean_probs * raw_load_fraction
+        ).sum()
+        capacity = self.capacity.capacity(x.shape[0], x.device)
+        accepted_assignments = load.sum().float()
+        requested_assignments = raw_load.sum().float().clamp_min(1.0)
         diagnostics = RoutingDiagnostics(
+            raw_load=raw_load,
             load=load,
             load_fraction=load_fraction,
-            capacity=self.capacity.capacity(x.shape[0], x.device),
-            dropped=(~dispatch_mask).any(dim=-1).float().mean(),
+            raw_load_fraction=raw_load_fraction,
+            capacity=capacity,
+            dropped=(~dispatch_mask).all(dim=-1).float().mean(),
+            dropped_assignments=(~dispatch_mask).float().mean(),
             entropy=routing_entropy(probs),
             overflow=overflow,
             aux_loss=aux_loss,
+            capacity_utilization=load.float().sum() / capacity.float().sum().clamp_min(1.0),
+            matched_compute_fraction=accepted_assignments / requested_assignments,
         )
         return RoutingResult(indices, weights, dispatch_mask, diagnostics)
 
@@ -100,7 +114,7 @@ class ReflectedRouter(TopKRouter):
     def forward(self, x: torch.Tensor) -> RoutingResult:
         result = super().forward(x)
         if self.training:
-            self.pressure.update(result.diagnostics.load_fraction)
+            self.pressure.update(result.diagnostics.raw_load_fraction)
         result.diagnostics.pressure = self.pressure.q.detach().clone()
         return result
 
@@ -118,4 +132,3 @@ def build_router(cfg: RouterConfig) -> Router:
     if cfg.kind == "reflected":
         return ReflectedRouter(cfg)
     raise ValueError(f"Unknown router kind: {cfg.kind}")
-

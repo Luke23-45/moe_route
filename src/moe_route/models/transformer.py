@@ -130,7 +130,11 @@ class DecoderOnlyLM(nn.Module):
 
     def load_pressure_state_dict(self, states: list[list[dict[str, torch.Tensor] | None]]) -> None:
         moe_layers = [m for m in self.modules() if isinstance(m, MoEFeedForward)]
-        for module, state in zip(moe_layers, states, strict=False):
+        if len(states) != len(moe_layers):
+            raise ValueError(
+                f"Pressure state count mismatch: checkpoint has {len(states)}, model has {len(moe_layers)}."
+            )
+        for module, state in zip(moe_layers, states, strict=True):
             module.load_pressure_state_dict(state)
 
 
@@ -163,4 +167,3 @@ def build_model_cfg(cfg) -> ModelConfig:
         expert_hidden_size=int(cfg.model.moe.expert_hidden_size),
         router=router_cfg,
     )
-
