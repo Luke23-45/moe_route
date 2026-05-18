@@ -47,7 +47,7 @@ class MoEFeedForward(nn.Module):
         flat_mask = route.dispatch_mask.view(-1)
         token_ranks = route.token_ranks.view(-1)
 
-        cap = route.diagnostics.capacity[0].item()
+        cap = max(int(self.router.cfg.capacity_factor * num_tokens * self.router.cfg.top_k / self.router.cfg.num_experts), 1)
         num_experts = len(self.experts)
 
         dummy_idx = num_experts * (cap + 1) - 1
