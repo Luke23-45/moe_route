@@ -1,0 +1,21 @@
+name: tinystories_smoke
+adapter: tiny_text
+dataset_name: roneneldan/TinyStories
+dataset_config: null
+split: train
+streaming: false
+cache_dir: artifacts/cache/tinystories
+text_field: text
+local_texts:
+  - "Once there was a small cat who learned to share."
+  - "A robot counted stars and wrote a short story."
+  - "The child packed a bag, walked home, and smiled."
+max_samples: 2048
+sequence_length: 128
+batch_size: 4
+shuffle: true
+num_workers: 0
+pin_memory: false
+persistent_workers: false
+prefetch_factor: null
+

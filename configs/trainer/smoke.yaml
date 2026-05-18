@@ -1,0 +1,12 @@
+name: smoke
+max_steps: 5
+grad_accum_steps: 1
+precision: fp32
+clip_grad_norm: 1.0
+compile: false
+log_every: 1
+eval_every: 0
+checkpoint_every: 5
+save_dir: artifacts/checkpoints
+resume_from: null
+

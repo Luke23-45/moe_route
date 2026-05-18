@@ -1,0 +1,10 @@
+name: local
+backend: jsonl
+mlflow:
+  enabled: false
+  tracking_uri: artifacts/mlruns
+  experiment_name: moe-route
+tensorboard:
+  enabled: false
+  log_dir: artifacts/tensorboard
+

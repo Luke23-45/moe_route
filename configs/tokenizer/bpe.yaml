@@ -1,0 +1,7 @@
+name: bpe
+kind: bpe
+vocab_size: 32000
+min_frequency: 2
+special_tokens: ["<pad>", "<bos>", "<eos>", "<unk>"]
+path: artifacts/tokenizers/bpe.json
+

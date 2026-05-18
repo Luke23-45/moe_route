@@ -1,0 +1,53 @@
+[project]
+name = "moe-route"
+version = "0.1.0"
+description = "Load-aware reflected routing experiments for decoder-only MoE language models."
+readme = "README.md"
+requires-python = ">=3.11,<3.12"
+dependencies = [
+  "datasets>=2.20",
+  "hydra-core>=1.3",
+  "mlflow>=2.14",
+  "numpy>=1.26",
+  "omegaconf>=2.3",
+  "tokenizers>=0.19",
+  "torch>=2.3",
+  "tqdm>=4.66",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.2",
+  "ruff>=0.5",
+]
+tensorboard = ["tensorboard>=2.17"]
+lm-eval = ["lm-eval>=0.4"]
+
+[project.scripts]
+moe-route-train = "moe_route.cli.train:main"
+moe-route-eval-ppl = "moe_route.cli.eval_ppl:main"
+moe-route-eval-tasks = "moe_route.cli.eval_tasks:main"
+moe-route-analyze-routing = "moe_route.cli.analyze_routing:main"
+moe-route-sweep = "moe_route.cli.sweep:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/moe_route"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+addopts = "-q"
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+src = ["src", "tests", "scripts"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "SIM"]
+ignore = ["E501"]
+

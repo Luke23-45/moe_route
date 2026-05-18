@@ -1,0 +1,6 @@
+name: smoke_reflected
+description: CPU smoke reflected-router experiment.
+tags:
+  stage: smoke
+  router: reflected
+

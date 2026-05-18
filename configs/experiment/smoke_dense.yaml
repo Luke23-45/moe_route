@@ -1,0 +1,6 @@
+name: smoke_dense
+description: CPU smoke dense baseline.
+tags:
+  stage: smoke
+  router: dense
+

@@ -1,0 +1,18 @@
+defaults:
+  - data: tinystories_smoke
+  - tokenizer: byte
+  - model: tiny_moe
+  - router: reflected_top2
+  - optimizer: adamw
+  - trainer: smoke
+  - distributed: single
+  - tracking: local
+  - eval: ppl
+  - experiment: smoke_reflected
+  - _self_
+
+project_name: moe-route
+seed: 1337
+artifact_dir: artifacts
+run_name: ${experiment.name}
+
