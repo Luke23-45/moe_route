@@ -60,7 +60,9 @@ class MoEFeedForward(nn.Module):
     ) -> None:
         super().__init__()
         self.router: Router = build_router(router_cfg)
-        self.experts = BatchedExpertMLP(num_experts, d_model, expert_hidden_size, dropout)
+        self.experts = nn.ModuleList(
+            [ExpertMLP(d_model, expert_hidden_size, dropout) for _ in range(num_experts)]
+        )
         self.last_diagnostics: RoutingDiagnostics | None = None
         self.num_experts = num_experts
 
@@ -85,21 +87,31 @@ class MoEFeedForward(nn.Module):
         )
 
         flat_buffer = torch.zeros(self.num_experts * (cap + 1), flat.shape[-1], dtype=flat.dtype, device=flat.device)
-        flat_buffer.index_add_(0, flat_buffer_idx, flat.repeat_interleave(top_k, dim=0))
+        
+        # SOTA Zero-Copy Fast Path for top_k=1 (avoids memory allocation)
+        if top_k == 1:
+            flat_buffer.index_add_(0, flat_buffer_idx, flat)
+        else:
+            flat_buffer.index_add_(0, flat_buffer_idx, flat.repeat_interleave(top_k, dim=0))
 
         buffer = flat_buffer.view(self.num_experts, cap + 1, flat.shape[-1])
         
-        # SOTA Batched Matrix Multiplication (BMM) - Zero Python Overhead!
         buffer_out = torch.zeros_like(buffer)
-        buffer_out[:, :cap, :] = self.experts(buffer[:, :cap, :])
+        for expert_id, expert in enumerate(self.experts):
+            buffer_out[expert_id, :cap] = expert(buffer[expert_id, :cap])
 
         flat_buffer_out = buffer_out.view(self.num_experts * (cap + 1), flat.shape[-1])
         expert_out = flat_buffer_out.index_select(0, flat_buffer_idx)
 
-        weights = route.combine_weights.view(-1) * flat_mask.to(flat.dtype)
+        # Weights are already zeroed for dropped tokens by the router!
+        weights = route.combine_weights.view(-1)
         expert_out = expert_out * weights.unsqueeze(-1)
 
-        output = expert_out.view(num_tokens, top_k, flat.shape[-1]).sum(dim=1)
+        output = expert_out.view(num_tokens, top_k, flat.shape[-1])
+        if top_k == 1:
+            output = output.squeeze(1)
+        else:
+            output = output.sum(dim=1)
 
         self.last_diagnostics = route.diagnostics
         return output.reshape(original_shape), route.diagnostics.aux_loss
