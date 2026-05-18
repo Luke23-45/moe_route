@@ -42,7 +42,14 @@ def save_checkpoint(
 def load_checkpoint(path: str | Path, model: nn.Module, optimizer: Optimizer | None = None, scheduler=None) -> int:
     payload = torch.load(path, map_location="cpu", weights_only=False)
     raw_model = unwrap_model(model)
-    raw_model.load_state_dict(payload["model"])
+    
+    state_dict = payload["model"]
+    unwanted_prefix = '_orig_mod.'
+    for k, v in list(state_dict.items()):
+        if k.startswith(unwanted_prefix):
+            state_dict[k[len(unwanted_prefix):]] = state_dict.pop(k)
+            
+    raw_model.load_state_dict(state_dict)
     if payload.get("pressure") is not None and hasattr(raw_model, "load_pressure_state_dict"):
         raw_model.load_pressure_state_dict(payload["pressure"])
     if optimizer is not None and payload.get("optimizer") is not None:

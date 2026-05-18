@@ -53,7 +53,7 @@ def main() -> None:
         if args.analyze_routing and spec != "dense":
             print(f"\n--- Analyzing Routing Metrics for {run_name} ---")
             routing_out = out_dir / "routing_metrics.json"
-            cmd = module_cmd("moe_route.cli.analyze_routing", [f"run={run_dir}", f"output_file={routing_out}"])
+            cmd = module_cmd("moe_route.cli.analyze_routing", [f"+run={run_dir}", f"+output_file={routing_out}"])
             run_command(cmd, args.dry_run)
 
         # 2. PPL and Task Evaluation
@@ -77,11 +77,11 @@ def main() -> None:
                 print(f"\n--- Evaluating Checkpoint: {ckpt.name} ---")
                 if args.eval_ppl:
                     ppl_out = out_dir / f"ppl_{ckpt.stem}.json"
-                    cmd = module_cmd("moe_route.cli.eval_ppl", [f"checkpoint={ckpt}", f"output_file={ppl_out}"])
+                    cmd = module_cmd("moe_route.cli.eval_ppl", [f"+checkpoint={ckpt}", f"+output_file={ppl_out}"])
                     run_command(cmd, args.dry_run)
                 if args.eval_tasks:
                     tasks_out = out_dir / f"tasks_{ckpt.stem}.json"
-                    cmd = module_cmd("moe_route.cli.eval_tasks", [f"checkpoint={ckpt}", f"output_file={tasks_out}"])
+                    cmd = module_cmd("moe_route.cli.eval_tasks", [f"+checkpoint={ckpt}", f"+output_file={tasks_out}"])
                     run_command(cmd, args.dry_run)
 
 
