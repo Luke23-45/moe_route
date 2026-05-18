@@ -51,13 +51,14 @@ def train(cfg) -> Path | None:
     compile_enabled = bool(cfg.trainer.get("compile", False))
 
     if ctx.device.type == "cuda":
-        if precision == "bf16" and not torch.cuda.is_bf16_supported():
+        capability = torch.cuda.get_device_capability()
+        # bf16 requires Ampere (8.0) or higher for hardware acceleration
+        if precision == "bf16" and (capability[0] < 8 or not torch.cuda.is_bf16_supported()):
             if ctx.is_main:
-                print("[train] WARNING: bfloat16 is not supported by this GPU. Falling back to fp16.")
+                print(f"[train] WARNING: Native bfloat16 requires Compute Capability >= 8.0 (found {capability}). Falling back to fp16.")
             precision = "fp16"
         
         if compile_enabled:
-            capability = torch.cuda.get_device_capability()
             if capability[0] < 7:
                 if ctx.is_main:
                     print(f"[train] WARNING: torch.compile requires GPU compute capability >= 7.0 (found {capability}). Disabling compile.")

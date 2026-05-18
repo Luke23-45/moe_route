@@ -12,6 +12,12 @@ from moe_route.routing.routers import RouterConfig
 from moe_route.routing.types import RoutingDiagnostics
 
 
+def rotate_half(x: torch.Tensor) -> torch.Tensor:
+    x1 = x[..., : x.shape[-1] // 2]
+    x2 = x[..., x.shape[-1] // 2 :]
+    return torch.cat((-x2, x1), dim=-1)
+
+
 @dataclass(frozen=True)
 class ModelConfig:
     vocab_size: int
@@ -43,8 +49,9 @@ class CausalSelfAttention(nn.Module):
         freqs = 1.0 / (10000.0 ** (torch.arange(0, self.head_dim, 2)[: (self.head_dim // 2)].float() / self.head_dim))
         t = torch.arange(max_seq_len, dtype=torch.float32)
         freqs = torch.outer(t, freqs)
-        freqs_cis = torch.polar(torch.ones_like(freqs), freqs)
-        self.register_buffer("freqs_cis", freqs_cis, persistent=False)
+        freqs = torch.cat((freqs, freqs), dim=-1)
+        self.register_buffer("cos_cached", freqs.cos(), persistent=False)
+        self.register_buffer("sin_cached", freqs.sin(), persistent=False)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         batch, seq_len, width = x.shape
@@ -54,12 +61,11 @@ class CausalSelfAttention(nn.Module):
         k = k.transpose(1, 2)
         v = v.transpose(1, 2)
         
-        # Apply RoPE
-        q_ = torch.view_as_complex(q.float().reshape(*q.shape[:-1], -1, 2))
-        k_ = torch.view_as_complex(k.float().reshape(*k.shape[:-1], -1, 2))
-        freqs_cis = self.freqs_cis[:seq_len].view(1, 1, seq_len, -1)
-        q = torch.view_as_real(q_ * freqs_cis).flatten(3).type_as(q)
-        k = torch.view_as_real(k_ * freqs_cis).flatten(3).type_as(k)
+        # Apply RoPE (Inductor friendly, no complex numbers)
+        cos = self.cos_cached[:seq_len].view(1, 1, seq_len, self.head_dim).to(q.dtype)
+        sin = self.sin_cached[:seq_len].view(1, 1, seq_len, self.head_dim).to(q.dtype)
+        q = (q * cos) + (rotate_half(q) * sin)
+        k = (k * cos) + (rotate_half(k) * sin)
         
         # Flash Attention
         y = F.scaled_dot_product_attention(
