@@ -49,7 +49,7 @@ def load_checkpoint(path: str | Path, model: nn.Module, optimizer: Optimizer | N
         if k.startswith(unwanted_prefix):
             state_dict[k[len(unwanted_prefix):]] = state_dict.pop(k)
             
-    raw_model.load_state_dict(state_dict)
+    raw_model.load_state_dict(state_dict, strict=False)
     if payload.get("pressure") is not None and hasattr(raw_model, "load_pressure_state_dict"):
         raw_model.load_pressure_state_dict(payload["pressure"])
     if optimizer is not None and payload.get("optimizer") is not None:
