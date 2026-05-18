@@ -12,3 +12,10 @@ def test_runner_discovers_config_choices() -> None:
     spec.loader.exec_module(module)
     assert "smoke_reflected" in module.config_choices("experiment")
     assert "tinystories_smoke" in module.config_choices("data")
+    assert "tinystories" in module.config_choices("data")
+    assert "tinystories" in module.config_choices("trainer")
+
+
+def test_tinystories_suite_script_exists() -> None:
+    path = Path(__file__).resolve().parents[2] / "scripts" / "launch_tinystories_suite.py"
+    assert path.exists()

@@ -1,0 +1,18 @@
+name: tinystories
+max_epochs: 5
+max_steps: 1000000
+grad_accum_steps: 1
+precision: fp32
+clip_grad_norm: 1.0
+compile: false
+log_every: 10
+eval_every: 0
+checkpoint_every: 1000
+save_dir: artifacts/checkpoints/tinystories
+resume_from: null
+prepare_data: true
+progress:
+  enabled: true
+  dynamic_ncols: true
+  leave: true
+  mininterval: 0.5

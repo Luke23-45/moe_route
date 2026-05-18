@@ -1,0 +1,22 @@
+name: tinystories
+adapter: huggingface
+root_dir: artifacts/data/tinystories
+raw_dir: artifacts/data/tinystories/raw
+prepared_dir: artifacts/data/tinystories/prepared
+dataset_name: roneneldan/TinyStories
+dataset_config: null
+split: train
+streaming: false
+cache_dir: artifacts/data/tinystories/hf_cache
+cache_tokenized: true
+rebuild_cache: false
+text_field: text
+max_samples: null
+sequence_length: 256
+batch_size: 16
+shuffle: true
+num_workers: 4
+pin_memory: true
+persistent_workers: true
+prefetch_factor: 2
+

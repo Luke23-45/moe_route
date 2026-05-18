@@ -46,8 +46,15 @@ def _manifest_payload(cfg, tokenizer: TextTokenizer, samples: torch.Tensor | Non
     return payload
 
 
-def _is_ready(cfg, tokenizer: TextTokenizer, samples_path: Path, manifest_path: Path) -> bool:
-    if bool(cfg.get("rebuild_cache", False)):
+def _is_ready(
+    cfg,
+    tokenizer: TextTokenizer,
+    samples_path: Path,
+    manifest_path: Path,
+    *,
+    honor_rebuild: bool = True,
+) -> bool:
+    if honor_rebuild and bool(cfg.get("rebuild_cache", False)):
         return False
     if not samples_path.exists() or not manifest_path.exists():
         return False
@@ -67,7 +74,7 @@ def prepare_data(
         path.mkdir(parents=True, exist_ok=True)
 
     samples_path, manifest_path = prepared_dataset_paths(cfg, tokenizer)
-    if _is_ready(cfg, tokenizer, samples_path, manifest_path):
+    if _is_ready(cfg, tokenizer, samples_path, manifest_path, honor_rebuild=build_missing):
         manifest = read_manifest(manifest_path)
         return PreparedData(
             samples_path=samples_path,

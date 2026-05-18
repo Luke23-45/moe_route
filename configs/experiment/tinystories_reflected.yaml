@@ -1,0 +1,6 @@
+name: tinystories_reflected
+description: Full TinyStories reflected top-2 MoE experiment.
+tags:
+  stage: tinystories
+  router: reflected_top2
+

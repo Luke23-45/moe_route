@@ -25,9 +25,10 @@ def progress_cfg(cfg) -> ProgressConfig:
 
 def training_bar(cfg, epoch: int, total: int, initial: int = 0):
     progress = progress_cfg(cfg)
+    router_name = "dense" if not bool(cfg.model.moe.enabled) else str(cfg.router.name)
     desc = (
         f"{cfg.experiment.name} | data={cfg.data.name} | model={cfg.model.name} "
-        f"| router={cfg.router.name} | epoch={epoch}"
+        f"| router={router_name} | epoch={epoch}"
     )
     return tqdm(
         total=total,
@@ -39,4 +40,3 @@ def training_bar(cfg, epoch: int, total: int, initial: int = 0):
         mininterval=progress.mininterval,
         disable=not progress.enabled,
     )
-

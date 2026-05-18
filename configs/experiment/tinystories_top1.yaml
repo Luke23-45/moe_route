@@ -1,0 +1,6 @@
+name: tinystories_top1
+description: Full TinyStories top-1 MoE baseline.
+tags:
+  stage: tinystories
+  router: top1
+

@@ -1,0 +1,6 @@
+name: tinystories_dense
+description: Full TinyStories dense baseline.
+tags:
+  stage: tinystories
+  router: dense
+
