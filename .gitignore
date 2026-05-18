@@ -14,7 +14,7 @@ mlruns/
 *.ckpt
 *.safetensors
 data/cache/
-
+training_logs
 logs.md
 errors.md
 logs1.md
