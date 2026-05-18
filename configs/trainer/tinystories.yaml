@@ -2,7 +2,7 @@ name: tinystories
 max_epochs: 5
 max_steps: 1000000
 grad_accum_steps: 1
-precision: fp32
+precision: bf16
 clip_grad_norm: 1.0
 compile: false
 log_every: 10

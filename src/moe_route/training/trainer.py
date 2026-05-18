@@ -47,6 +47,15 @@ def train(cfg) -> Path | None:
     run_dir = Path(cfg.artifact_dir) / "runs" / str(cfg.run_name)
     if ctx.is_main:
         write_run_metadata(run_dir, cfg)
+        print(
+            f"[train] run={cfg.run_name} device={ctx.device} world_size={ctx.world_size} "
+            f"precision={cfg.trainer.precision}"
+        )
+        if ctx.device.type != "cuda":
+            print(
+                "[train] CUDA is not available. Training will run on CPU, which is not the intended "
+                "path for full TinyStories experiments."
+            )
     tracker = build_tracker(cfg, run_dir) if ctx.is_main else None
 
     tokenizer = build_tokenizer(cfg.tokenizer)

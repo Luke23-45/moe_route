@@ -6,7 +6,7 @@ prepared_dir: artifacts/data/tinystories/prepared
 dataset_name: roneneldan/TinyStories
 dataset_config: null
 split: train
-streaming: false
+streaming: true
 cache_dir: artifacts/data/tinystories/hf_cache
 cache_tokenized: true
 rebuild_cache: false
@@ -19,4 +19,4 @@ num_workers: 4
 pin_memory: true
 persistent_workers: true
 prefetch_factor: 2
-
+prepare_chunk_sequences: 8192

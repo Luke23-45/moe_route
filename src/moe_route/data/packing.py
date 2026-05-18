@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
+from pathlib import Path
 
 import torch
 from torch.utils.data import Dataset
@@ -43,6 +44,42 @@ class TensorPackedTokenDataset(Dataset[tuple[torch.Tensor, torch.Tensor]]):
     def __getitem__(self, index: int) -> tuple[torch.Tensor, torch.Tensor]:
         sample = self.samples[index]
         return sample[:-1], sample[1:]
+
+
+class MemoryMappedPackedDataset(Dataset[tuple[torch.Tensor, torch.Tensor]]):
+    def __init__(
+        self,
+        path: str | Path,
+        num_samples: int,
+        sequence_length: int,
+        dtype: torch.dtype = torch.int32,
+    ) -> None:
+        self.path = str(path)
+        self.num_samples = int(num_samples)
+        self.sequence_length = int(sequence_length)
+        self.width = self.sequence_length + 1
+        self.dtype = dtype
+        self.samples: torch.Tensor | None = None
+
+    def _ensure_open(self) -> torch.Tensor:
+        if self.samples is None:
+            size = self.num_samples * self.width
+            self.samples = torch.from_file(self.path, shared=False, size=size, dtype=self.dtype).view(
+                self.num_samples, self.width
+            )
+        return self.samples
+
+    def __len__(self) -> int:
+        return self.num_samples
+
+    def __getitem__(self, index: int) -> tuple[torch.Tensor, torch.Tensor]:
+        sample = self._ensure_open()[index].long()
+        return sample[:-1], sample[1:]
+
+    def __getstate__(self) -> dict[str, object]:
+        state = self.__dict__.copy()
+        state["samples"] = None
+        return state
 
 
 def pack_tokens(tokens: torch.Tensor, sequence_length: int) -> torch.Tensor:

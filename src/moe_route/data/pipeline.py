@@ -1,10 +1,9 @@
 from __future__ import annotations
 
-import torch
 from torch.utils.data import DataLoader, DistributedSampler
 
 from moe_route.data.corpus import build_corpus
-from moe_route.data.packing import PackedTokenDataset, TensorPackedTokenDataset
+from moe_route.data.packing import MemoryMappedPackedDataset, PackedTokenDataset
 from moe_route.data.prepare import prepare_data
 from moe_route.tokenization.tokenizers import TextTokenizer
 
@@ -12,8 +11,11 @@ from moe_route.tokenization.tokenizers import TextTokenizer
 def build_dataset(cfg, tokenizer: TextTokenizer, prepare: bool = True):
     if bool(cfg.get("cache_tokenized", False)):
         prepared = prepare_data(cfg, tokenizer, show_progress=prepare, build_missing=prepare)
-        samples = torch.load(prepared.samples_path, map_location="cpu", weights_only=True)
-        return TensorPackedTokenDataset(samples)
+        return MemoryMappedPackedDataset(
+            path=prepared.samples_path,
+            num_samples=prepared.num_samples,
+            sequence_length=prepared.sequence_length,
+        )
     corpus = build_corpus(cfg)
     return PackedTokenDataset(corpus.texts(), tokenizer, int(cfg.sequence_length))
 

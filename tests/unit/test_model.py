@@ -8,7 +8,7 @@ from moe_route.routing.routers import RouterConfig
 
 def test_decoder_moe_forward_loss() -> None:
     cfg = ModelConfig(
-        vocab_size=256,
+        vocab_size=259,
         max_seq_len=16,
         d_model=32,
         n_layers=1,
@@ -22,9 +22,8 @@ def test_decoder_moe_forward_loss() -> None:
         router=RouterConfig(kind="reflected", d_model=32, num_experts=4, top_k=2),
     )
     model = DecoderOnlyLM(cfg)
-    input_ids = torch.randint(0, 255, (2, 16))
+    input_ids = torch.randint(0, 259, (2, 16))
     _, loss, parts = model(input_ids, input_ids)
     assert loss is not None
     assert torch.isfinite(loss)
     assert "aux_loss" in parts
-

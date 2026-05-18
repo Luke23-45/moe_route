@@ -1,5 +1,5 @@
 name: tiny_dense
-vocab_size: 256
+vocab_size: ${tokenizer.vocab_size}
 max_seq_len: ${data.sequence_length}
 d_model: 128
 n_layers: 2
@@ -11,4 +11,3 @@ moe:
   every_n_layers: 0
   num_experts: 0
   expert_hidden_size: 256
-

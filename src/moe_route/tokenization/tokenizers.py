@@ -22,17 +22,21 @@ class ByteTokenizer:
     pad_token_id: int = 0
     bos_token_id: int = 1
     eos_token_id: int = 2
-    vocab_size: int = 256
+    vocab_size: int = 259
 
     def encode(self, text: str, add_special_tokens: bool = True) -> list[int]:
-        ids = [int(b) for b in text.encode("utf-8", errors="replace")]
+        byte_offset = 3
+        ids = [int(b) + byte_offset for b in text.encode("utf-8", errors="replace")]
         if add_special_tokens:
             return [self.bos_token_id, *ids, self.eos_token_id]
         return ids
 
     def decode(self, ids: Iterable[int]) -> str:
+        byte_offset = 3
         filtered = [i for i in ids if i not in {self.pad_token_id, self.bos_token_id, self.eos_token_id}]
-        return bytes([i for i in filtered if 0 <= i <= 255]).decode("utf-8", errors="replace")
+        return bytes([i - byte_offset for i in filtered if byte_offset <= i <= 255 + byte_offset]).decode(
+            "utf-8", errors="replace"
+        )
 
 
 class BpeTokenizer:

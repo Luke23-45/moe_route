@@ -55,7 +55,7 @@ def dataset_fingerprint(cfg, tokenizer: TextTokenizer) -> str:
 def prepared_dataset_paths(cfg, tokenizer: TextTokenizer) -> tuple[Path, Path]:
     paths = data_paths(cfg)
     key = dataset_fingerprint(cfg, tokenizer)[:24]
-    return paths.prepared_dir / f"packed_{key}.pt", paths.prepared_dir / f"packed_{key}.json"
+    return paths.prepared_dir / f"packed_{key}.bin", paths.prepared_dir / f"packed_{key}.json"
 
 
 def write_manifest(path: Path, payload: dict[str, Any]) -> None:
@@ -65,4 +65,3 @@ def write_manifest(path: Path, payload: dict[str, Any]) -> None:
 
 def read_manifest(path: Path) -> dict[str, Any]:
     return json.loads(path.read_text(encoding="utf-8"))
-

@@ -25,11 +25,14 @@ def test_prepare_data_reuses_manifest(tmp_path) -> None:
             "local_texts": ["research code " * 20],
             "max_samples": 2,
             "sequence_length": 8,
+            "prepare_chunk_sequences": 4,
         }
     )
     tokenizer = ByteTokenizer()
     first = prepare_data(cfg, tokenizer, show_progress=False)
     second = prepare_data(cfg, tokenizer, show_progress=False)
     assert first.samples_path == second.samples_path
+    assert first.samples_path.suffix == ".bin"
+    assert first.num_samples > 0
     assert not first.reused
     assert second.reused

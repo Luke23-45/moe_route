@@ -15,8 +15,9 @@ from moe_route.data.manifest import (
     read_manifest,
     write_manifest,
 )
-from moe_route.data.packing import pack_tokens
 from moe_route.tokenization.tokenizers import TextTokenizer
+
+TOKEN_DTYPE = torch.int32
 
 
 @dataclass(frozen=True)
@@ -26,10 +27,17 @@ class PreparedData:
     num_samples: int
     num_tokens: int
     reused: bool
+    sequence_length: int
 
 
-def _manifest_payload(cfg, tokenizer: TextTokenizer, samples: torch.Tensor | None = None) -> dict[str, object]:
-    payload: dict[str, object] = {
+def _manifest_payload(
+    cfg,
+    tokenizer: TextTokenizer,
+    *,
+    num_samples: int,
+    num_tokens: int,
+) -> dict[str, object]:
+    return {
         "fingerprint": dataset_fingerprint(cfg, tokenizer),
         "name": str(cfg.name),
         "adapter": str(cfg.adapter),
@@ -38,12 +46,11 @@ def _manifest_payload(cfg, tokenizer: TextTokenizer, samples: torch.Tensor | Non
         "split": None if cfg.get("split") is None else str(cfg.get("split")),
         "sequence_length": int(cfg.sequence_length),
         "max_samples": None if cfg.get("max_samples") is None else int(cfg.get("max_samples")),
+        "num_samples": int(num_samples),
+        "num_tokens": int(num_tokens),
+        "token_dtype": str(TOKEN_DTYPE).replace("torch.", ""),
         "created_at_unix": int(time.time()),
     }
-    if samples is not None:
-        payload["num_samples"] = int(samples.shape[0])
-        payload["num_tokens"] = int(samples.numel())
-    return payload
 
 
 def _is_ready(
@@ -62,13 +69,23 @@ def _is_ready(
     return manifest.get("fingerprint") == dataset_fingerprint(cfg, tokenizer)
 
 
+def _flush_buffer(out_file, token_buffer: list[int], width: int) -> tuple[int, int]:
+    usable = (len(token_buffer) // width) * width
+    if usable == 0:
+        return 0, 0
+    block = torch.tensor(token_buffer[:usable], dtype=TOKEN_DTYPE)
+    block.numpy().tofile(out_file)
+    del token_buffer[:usable]
+    return usable // width, usable
+
+
 def prepare_data(
     cfg,
     tokenizer: TextTokenizer,
     show_progress: bool = True,
     build_missing: bool = True,
 ) -> PreparedData:
-    """Validate/download/tokenize/pack a configured corpus into a training-ready tensor shard."""
+    """Prepare packed token sequences without materializing the full corpus in RAM."""
     paths = data_paths(cfg)
     for path in (paths.root_dir, paths.raw_dir, paths.prepared_dir, paths.cache_dir):
         path.mkdir(parents=True, exist_ok=True)
@@ -82,6 +99,7 @@ def prepare_data(
             num_samples=int(manifest["num_samples"]),
             num_tokens=int(manifest["num_tokens"]),
             reused=True,
+            sequence_length=int(manifest["sequence_length"]),
         )
     if not build_missing:
         raise FileNotFoundError(
@@ -90,33 +108,49 @@ def prepare_data(
         )
 
     corpus = build_corpus(cfg)
-    token_buffer: list[int] = []
+    width = int(cfg.sequence_length) + 1
+    flush_threshold_sequences = int(cfg.get("prepare_chunk_sequences", 8192))
+    flush_threshold_tokens = flush_threshold_sequences * width
     max_samples = cfg.get("max_samples")
-    total = None if max_samples is None else int(max_samples)
+    total_docs = None if max_samples is None else int(max_samples)
+    token_buffer: list[int] = []
+    num_samples = 0
+    num_tokens = 0
+
     iterator = tqdm(
         corpus.texts(),
-        total=total,
+        total=total_docs,
         desc=f"prepare:{cfg.name}",
         unit="docs",
         dynamic_ncols=True,
         disable=not show_progress,
     )
-    for text in iterator:
-        token_buffer.extend(tokenizer.encode(text, add_special_tokens=True))
-        if show_progress:
-            iterator.set_postfix(tokens=len(token_buffer), refresh=False)
+    with samples_path.open("wb") as out_file:
+        for text in iterator:
+            token_buffer.extend(tokenizer.encode(text, add_special_tokens=True))
+            if len(token_buffer) >= flush_threshold_tokens:
+                written_samples, written_tokens = _flush_buffer(out_file, token_buffer, width)
+                num_samples += written_samples
+                num_tokens += written_tokens
+            if show_progress:
+                iterator.set_postfix(samples=num_samples, buffered=len(token_buffer), refresh=False)
 
-    if not token_buffer:
-        raise ValueError(f"Data source {cfg.name} produced no tokenizable text.")
-    tokens = torch.tensor(token_buffer, dtype=torch.long)
-    samples = pack_tokens(tokens, int(cfg.sequence_length))
-    torch.save(samples, samples_path)
-    payload = _manifest_payload(cfg, tokenizer, samples)
+        written_samples, written_tokens = _flush_buffer(out_file, token_buffer, width)
+        num_samples += written_samples
+        num_tokens += written_tokens
+
+    if num_samples == 0:
+        if samples_path.exists():
+            samples_path.unlink()
+        raise ValueError(f"Data source {cfg.name} produced too few tokens to create one packed sample.")
+
+    payload = _manifest_payload(cfg, tokenizer, num_samples=num_samples, num_tokens=num_tokens)
     write_manifest(manifest_path, payload)
     return PreparedData(
         samples_path=samples_path,
         manifest_path=manifest_path,
-        num_samples=int(samples.shape[0]),
-        num_tokens=int(samples.numel()),
+        num_samples=num_samples,
+        num_tokens=num_tokens,
         reused=False,
+        sequence_length=int(cfg.sequence_length),
     )
