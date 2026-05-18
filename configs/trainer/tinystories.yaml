@@ -1,5 +1,5 @@
 name: tinystories
-max_epochs: 5
+max_epochs: 10
 max_steps: 1000000
 grad_accum_steps: 1
 precision: bf16
