@@ -65,6 +65,39 @@ class MoEFeedForward(nn.Module):
         self.num_experts = num_experts
 
     def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        # Dispatch to dense or sparse path based on router type
+        from moe_route.routing.reflected_controller import ReflectedController
+
+        if isinstance(self.router, ReflectedController):
+            return self._forward_dense(x)
+        return self._forward_sparse(x)
+
+    def _forward_dense(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        """Dense reflected routing: every token → every expert, weighted by soft probs.
+
+        Implements §1 line 75-78: y_t = Σ_e p̃_{t,e} · f_e(h_t)
+        """
+        original_shape = x.shape  # [B, S, D]
+        flat = x.reshape(-1, original_shape[-1])  # [T, D]
+        route = self.router(flat)
+
+        # Expand all tokens to all experts: [T, D] → [E, T, D]
+        expert_input = flat.unsqueeze(0).expand(self.num_experts, -1, -1)
+
+        # Run all experts in parallel via batched MLP: [E, T, D] → [E, T, D]
+        expert_output = self.experts(expert_input)
+
+        # Weight by routing probabilities: [T, E] → [E, T, 1]
+        weights = route.combine_weights.T.unsqueeze(-1)  # [E, T, 1]
+
+        # §1 line 77: y_t = Σ_e p̃_{t,e} · f_e(h_t)
+        output = (expert_output * weights).sum(dim=0)  # [T, D]
+
+        self.last_diagnostics = route.diagnostics
+        return output.reshape(original_shape), route.diagnostics.aux_loss
+
+    def _forward_sparse(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        """Sparse top-k routing with scatter/gather dispatch (original path)."""
         original_shape = x.shape
         flat = x.reshape(-1, original_shape[-1])
         route = self.router(flat)

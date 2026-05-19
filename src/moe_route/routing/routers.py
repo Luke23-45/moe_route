@@ -27,6 +27,11 @@ class RouterConfig:
     pressure_beta: float = 1.0
     pressure_gamma: float = 0.0
     pressure_decay: float = 0.0
+    # Reflected controller (v2) specific fields
+    temperature: float = 1.0
+    pressure_scale: float = 1.0
+    pressure_eps: float = 1e-8
+    learnable_bias: bool = True
 
 
 class Router(nn.Module, ABC):
@@ -121,7 +126,6 @@ class ReflectedRouter(TopKRouter):
 
     def forward(self, x: torch.Tensor) -> RoutingResult:
         result = super().forward(x)
-        result.diagnostics.pressure = self.pressure.q.detach().clone()
         if self.training:
             if x.device.type == "cuda":
                 if self._update_stream is None:
@@ -130,6 +134,7 @@ class ReflectedRouter(TopKRouter):
                     self.pressure.update(result.diagnostics.raw_load_fraction)
             else:
                 self.pressure.update(result.diagnostics.raw_load_fraction)
+        result.diagnostics.pressure = self.pressure.q.detach().clone()
         return result
 
     def pressure_state_dict(self) -> dict[str, torch.Tensor]:
@@ -145,4 +150,24 @@ def build_router(cfg: RouterConfig) -> Router:
         return TopKRouter(cfg)
     if cfg.kind == "reflected":
         return ReflectedRouter(cfg)
+    if cfg.kind == "reflected_v2":
+        from moe_route.routing.reflected_controller import (
+            ReflectedController,
+            ReflectedControllerConfig,
+        )
+
+        return ReflectedController(
+            ReflectedControllerConfig(
+                d_model=cfg.d_model,
+                num_experts=cfg.num_experts,
+                temperature=cfg.temperature,
+                pressure_scale=cfg.pressure_scale,
+                pressure_lr=cfg.pressure_lr,
+                pressure_beta=cfg.pressure_beta,
+                pressure_eps=cfg.pressure_eps,
+                pressure_decay=cfg.pressure_decay,
+                learnable_bias=cfg.learnable_bias,
+                z_loss_weight=cfg.z_loss_weight,
+            )
+        )
     raise ValueError(f"Unknown router kind: {cfg.kind}")

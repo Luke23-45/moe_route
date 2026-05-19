@@ -1,0 +1,14 @@
+name: reflected
+kind: reflected_v2
+temperature: 1.0
+pressure_scale: 1.0
+pressure_lr: 0.05
+pressure_beta: 1.0
+pressure_eps: 1.0e-8
+pressure_decay: 0.0
+learnable_bias: true
+z_loss_weight: 0.0
+aux_loss_weight: 0.0
+top_k: 1
+capacity_factor: 1.25
+drop_tokens: true

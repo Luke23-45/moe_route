@@ -1,0 +1,5 @@
+name: tinystories_reflected_v2
+description: TinyStories with standalone reflected controller (dense, aux-loss-free).
+tags:
+  stage: tinystories
+  router: reflected_v2
