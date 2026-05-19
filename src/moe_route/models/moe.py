@@ -60,9 +60,7 @@ class MoEFeedForward(nn.Module):
     ) -> None:
         super().__init__()
         self.router: Router = build_router(router_cfg)
-        self.experts = nn.ModuleList(
-            [ExpertMLP(d_model, expert_hidden_size, dropout) for _ in range(num_experts)]
-        )
+        self.experts = BatchedExpertMLP(num_experts, d_model, expert_hidden_size, dropout)
         self.last_diagnostics: RoutingDiagnostics | None = None
         self.num_experts = num_experts
 
@@ -97,8 +95,7 @@ class MoEFeedForward(nn.Module):
         buffer = flat_buffer.view(self.num_experts, cap + 1, flat.shape[-1])
         
         buffer_out = torch.zeros_like(buffer)
-        for expert_id, expert in enumerate(self.experts):
-            buffer_out[expert_id, :cap] = expert(buffer[expert_id, :cap])
+        buffer_out[:, :cap, :] = self.experts(buffer[:, :cap, :])
 
         flat_buffer_out = buffer_out.view(self.num_experts * (cap + 1), flat.shape[-1])
         expert_out = flat_buffer_out.index_select(0, flat_buffer_idx)

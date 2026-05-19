@@ -113,6 +113,7 @@ class ReflectedRouter(TopKRouter):
                 decay=cfg.pressure_decay,
             )
         )
+        self._update_stream = None
 
     def scores(self, x: torch.Tensor) -> torch.Tensor:
         self.pressure.to(x.device)
@@ -120,9 +121,15 @@ class ReflectedRouter(TopKRouter):
 
     def forward(self, x: torch.Tensor) -> RoutingResult:
         result = super().forward(x)
-        if self.training:
-            self.pressure.update(result.diagnostics.raw_load_fraction)
         result.diagnostics.pressure = self.pressure.q.detach().clone()
+        if self.training:
+            if x.device.type == "cuda":
+                if self._update_stream is None:
+                    self._update_stream = torch.cuda.Stream(device=x.device)
+                with torch.cuda.stream(self._update_stream):
+                    self.pressure.update(result.diagnostics.raw_load_fraction)
+            else:
+                self.pressure.update(result.diagnostics.raw_load_fraction)
         return result
 
     def pressure_state_dict(self) -> dict[str, torch.Tensor]:

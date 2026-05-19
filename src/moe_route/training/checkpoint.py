@@ -39,6 +39,42 @@ def save_checkpoint(
     return output
 
 
+def migrate_state_dict_to_batched(state_dict: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
+    new_state_dict = {}
+    expert_params = {}
+    for key, tensor in state_dict.items():
+        if ".ff.experts." in key and (".net." in key):
+            parts = key.split(".ff.experts.")
+            prefix = parts[0] + ".ff.experts"
+            suffix = parts[1]
+            expert_id = int(suffix.split(".")[0])
+            param_path = ".".join(suffix.split(".")[1:])
+            
+            group_key = (prefix, param_path)
+            if group_key not in expert_params:
+                expert_params[group_key] = {}
+            expert_params[group_key][expert_id] = tensor
+        else:
+            new_state_dict[key] = tensor
+            
+    for (prefix, param_path), expert_tensors in expert_params.items():
+        num_experts = len(expert_tensors)
+        if param_path == "net.0.weight":
+            stacked = torch.stack([expert_tensors[i] for i in range(num_experts)])
+            new_state_dict[f"{prefix}.w1"] = stacked.transpose(1, 2)
+        elif param_path == "net.0.bias":
+            stacked = torch.stack([expert_tensors[i] for i in range(num_experts)])
+            new_state_dict[f"{prefix}.b1"] = stacked.unsqueeze(1)
+        elif param_path == "net.3.weight":
+            stacked = torch.stack([expert_tensors[i] for i in range(num_experts)])
+            new_state_dict[f"{prefix}.w2"] = stacked.transpose(1, 2)
+        elif param_path == "net.3.bias":
+            stacked = torch.stack([expert_tensors[i] for i in range(num_experts)])
+            new_state_dict[f"{prefix}.b2"] = stacked.unsqueeze(1)
+            
+    return new_state_dict
+
+
 def load_checkpoint(path: str | Path, model: nn.Module, optimizer: Optimizer | None = None, scheduler=None) -> int:
     payload = torch.load(path, map_location="cpu", weights_only=False)
     raw_model = unwrap_model(model)
@@ -49,6 +85,7 @@ def load_checkpoint(path: str | Path, model: nn.Module, optimizer: Optimizer | N
         if k.startswith(unwanted_prefix):
             state_dict[k[len(unwanted_prefix):]] = state_dict.pop(k)
             
+    state_dict = migrate_state_dict_to_batched(state_dict)
     raw_model.load_state_dict(state_dict, strict=False)
     if payload.get("pressure") is not None and hasattr(raw_model, "load_pressure_state_dict"):
         raw_model.load_pressure_state_dict(payload["pressure"])
