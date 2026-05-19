@@ -175,8 +175,9 @@ def test_learnable_bias_gradient() -> None:
     x = torch.randn(6, 8)
     result = router(x)
 
-    # Create a simple loss from the routing weights
-    loss = result.combine_weights.sum()
+    # Create a simple loss from the routing weights (weighted sum to avoid constant sum=1)
+    target = torch.randn_like(result.combine_weights)
+    loss = (result.combine_weights * target).sum()
     loss.backward()
 
     assert router.bias.grad is not None, "bias should receive gradients"
@@ -242,3 +243,63 @@ def test_dense_moe_e2e() -> None:
 
 # Need pytest for approx
 import pytest
+
+
+# ── Mode B (Sparse Reflected Deployment) tests ──
+
+
+def test_sparse_shapes() -> None:
+    """Sparse mode returns [T, K] indices and weights for Top-K experts."""
+    router = _make_controller(routing_mode="sparse", top_k=2)
+    result = router(torch.randn(6, 8))
+    assert result.expert_indices.shape == (6, 2), "indices should be [T, K]"
+    assert result.combine_weights.shape == (6, 2), "weights should be [T, K]"
+    assert result.dispatch_mask.shape == (6, 2), "mask should be [T, K]"
+    assert result.diagnostics.dropped_assignments >= 0.0, "diagnostics.dropped_assignments should be computed"
+    assert result.diagnostics.entropy > 0.0, "entropy should be non-zero"
+
+
+def test_invalid_routing_mode_raises() -> None:
+    """ReflectedControllerConfig with invalid routing_mode raises ValueError."""
+    with pytest.raises(ValueError, match="Invalid routing_mode"):
+        _make_controller(routing_mode="invalid_mode")
+
+
+def test_sparse_mode_invalid_top_k_raises() -> None:
+    """ReflectedControllerConfig with routing_mode='sparse' and missing/invalid top_k raises ValueError."""
+    with pytest.raises(ValueError, match="requires a positive 'top_k'"):
+        _make_controller(routing_mode="sparse", top_k=None)
+    with pytest.raises(ValueError, match="requires a positive 'top_k'"):
+        _make_controller(routing_mode="sparse", top_k=0)
+    with pytest.raises(ValueError, match="requires a positive 'top_k'"):
+        _make_controller(routing_mode="sparse", top_k=-1)
+
+
+def test_sparse_moe_e2e() -> None:
+    """MoEFeedForward with sparse reflected controller: correct output shape and sparse dispatch flow."""
+    from moe_route.models.moe import MoEFeedForward
+
+    router_cfg = RouterConfig(
+        kind="reflected_v2",
+        d_model=16,
+        num_experts=4,
+        routing_mode="sparse",
+        top_k=2,
+        z_loss_weight=0.0
+    )
+    moe = MoEFeedForward(
+        d_model=16,
+        num_experts=4,
+        expert_hidden_size=32,
+        dropout=0.0,
+        router_cfg=router_cfg,
+    )
+    x = torch.randn(2, 8, 16)  # [batch, seq, d_model]
+    output, aux_loss = moe(x)
+
+    assert output.shape == x.shape, f"output shape {output.shape} should match input {x.shape}"
+    assert aux_loss.item() == 0.0, "aux_loss should be 0 for reflected_v2 with z_loss_weight=0"
+    assert moe.last_diagnostics is not None
+    assert moe.last_diagnostics.pressure is not None
+    assert moe.last_diagnostics.dropped_assignments is not None
+

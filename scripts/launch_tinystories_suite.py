@@ -83,6 +83,15 @@ SUITE: tuple[ExperimentSpec, ...] = (
         dispatch_mode="dense",
         description="Reflected controller (dense soft routing, aux-loss-free)",
     ),
+    ExperimentSpec(
+        name="reflected_sparse",
+        experiment="tinystories_reflected_v2",
+        model="tiny_moe",
+        router="reflected_sparse",
+        is_moe=True,
+        dispatch_mode="sparse",
+        description="Reflected controller (sparse top-2 routing, aux-loss-free)",
+    ),
 )
 
 SUITE_BY_NAME: dict[str, ExperimentSpec] = {spec.name: spec for spec in SUITE}

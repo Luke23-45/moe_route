@@ -48,6 +48,41 @@ class BatchedExpertMLP(nn.Module):
         h = self.dropout(h)
         return torch.bmm(h, self.w2) + self.b2
 
+    def forward_dense_fused(self, x: torch.Tensor, weights: torch.Tensor) -> torch.Tensor:
+        """SOTA Fused Grouped GEMM for Dense Soft Routing.
+        
+        Mathematically computes: y_t = Σ_e p_{t,e} f_e(x_t)
+        But avoids expanding x to [E, T, D] and fuses the reduction into the W2 matmul.
+        
+        Args:
+            x: [T, d_model] flattened tokens.
+            weights: [T, E] routing probabilities.
+            
+        Returns:
+            [T, d_model] output.
+        """
+        # Step 1: W1 Projection without expansion
+        # x: [T, D], w1: [E, D, H] -> h: [E, T, H]
+        h = torch.einsum('td,edh->eth', x, self.w1) + self.b1
+        h = torch.nn.functional.gelu(h)
+        h = self.dropout(h)
+
+        # Step 2: Weight hidden states by routing probabilities BEFORE W2
+        # weights: [T, E] -> [E, T, 1]
+        p = weights.T.unsqueeze(-1)
+        h_weighted = h * p  # [E, T, H]
+
+        # Step 3: Fused W2 Projection & Expert Reduction
+        # h_weighted: [E, T, H], w2: [E, H, D] -> out: [T, D]
+        # This single einsum computes the final linear projection AND sums over experts (e)
+        out = torch.einsum('eth,ehd->td', h_weighted, self.w2)
+
+        # Step 4: Add weighted biases
+        # p_raw: [T, E], b2: [E, 1, D] -> [T, D]
+        bias_term = torch.einsum('te,ed->td', weights, self.b2.squeeze(1))
+        
+        return out + bias_term
+
 
 class MoEFeedForward(nn.Module):
     def __init__(
@@ -65,10 +100,10 @@ class MoEFeedForward(nn.Module):
         self.num_experts = num_experts
 
     def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
-        # Dispatch to dense or sparse path based on router type
+        # Dispatch to dense or sparse path based on router type and explicit mode
         from moe_route.routing.reflected_controller import ReflectedController
 
-        if isinstance(self.router, ReflectedController):
+        if isinstance(self.router, ReflectedController) and getattr(self.router.cfg, "routing_mode", "dense") == "dense":
             return self._forward_dense(x)
         return self._forward_sparse(x)
 
@@ -81,17 +116,8 @@ class MoEFeedForward(nn.Module):
         flat = x.reshape(-1, original_shape[-1])  # [T, D]
         route = self.router(flat)
 
-        # Expand all tokens to all experts: [T, D] → [E, T, D]
-        expert_input = flat.unsqueeze(0).expand(self.num_experts, -1, -1)
-
-        # Run all experts in parallel via batched MLP: [E, T, D] → [E, T, D]
-        expert_output = self.experts(expert_input)
-
-        # Weight by routing probabilities: [T, E] → [E, T, 1]
-        weights = route.combine_weights.T.unsqueeze(-1)  # [E, T, 1]
-
-        # §1 line 77: y_t = Σ_e p̃_{t,e} · f_e(h_t)
-        output = (expert_output * weights).sum(dim=0)  # [T, D]
+        # Use SOTA fused Grouped GEMM to avoid [E, T, D] memory allocation
+        output = self.experts.forward_dense_fused(flat, route.combine_weights)  # [T, D]
 
         self.last_diagnostics = route.diagnostics
         return output.reshape(original_shape), route.diagnostics.aux_loss

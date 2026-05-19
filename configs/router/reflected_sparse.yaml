@@ -1,6 +1,6 @@
-name: reflected
+name: reflected_sparse
 kind: reflected_v2
-routing_mode: dense
+routing_mode: sparse
 temperature: 1.0
 pressure_scale: 1.0
 pressure_lr: 0.05
@@ -10,7 +10,7 @@ pressure_decay: 0.0
 learnable_bias: true
 z_loss_weight: 0.0
 aux_loss_weight: 0.0
-# Structurally ignored in dense mode, kept for backwards compatibility
-top_k: 1
+# Mode B parameters
+top_k: 2
 capacity_factor: 1.25
 drop_tokens: true

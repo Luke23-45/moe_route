@@ -32,6 +32,8 @@ class RouterConfig:
     pressure_scale: float = 1.0
     pressure_eps: float = 1e-8
     learnable_bias: bool = True
+    # Explicit routing mode selection
+    routing_mode: str = "dense"
 
 
 class Router(nn.Module, ABC):
@@ -156,6 +158,11 @@ def build_router(cfg: RouterConfig) -> Router:
             ReflectedControllerConfig,
         )
 
+        # Safely extract routing_mode and sparse configuration overrides
+        routing_mode = cfg.routing_mode if hasattr(cfg, "routing_mode") else "dense"
+        if not routing_mode:
+            routing_mode = "dense"
+
         return ReflectedController(
             ReflectedControllerConfig(
                 d_model=cfg.d_model,
@@ -168,6 +175,11 @@ def build_router(cfg: RouterConfig) -> Router:
                 pressure_decay=cfg.pressure_decay,
                 learnable_bias=cfg.learnable_bias,
                 z_loss_weight=cfg.z_loss_weight,
+                # Mode selection and capacity bounds mapping
+                routing_mode=routing_mode,
+                top_k=cfg.top_k if cfg.top_k > 0 else None,
+                capacity_factor=cfg.capacity_factor,
+                drop_tokens=cfg.drop_tokens,
             )
         )
     raise ValueError(f"Unknown router kind: {cfg.kind}")
