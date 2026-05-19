@@ -12,6 +12,9 @@ cache_tokenized: true
 rebuild_cache: false
 text_field: text
 max_samples: null
+holdout_fraction: 0.001
+holdout_seed: 1337
+prepared_split: train
 sequence_length: 1024
 batch_size: 8
 shuffle: true

@@ -5,6 +5,7 @@ from torch import nn
 
 from moe_route.routing.routers import Router, RouterConfig, build_router
 from moe_route.routing.types import RoutingDiagnostics
+from moe_route.routing.reflected_controller import ReflectedController
 
 
 class ExpertMLP(nn.Module):
@@ -63,7 +64,10 @@ class BatchedExpertMLP(nn.Module):
         """
         # Step 1: W1 Projection without expansion
         # x: [T, D], w1: [E, D, H] -> h: [E, T, H]
-        h = torch.einsum('td,edh->eth', x, self.w1) + self.b1
+        T, D = x.shape
+        E, _, H = self.w1.shape
+        w1_reshaped = self.w1.transpose(0, 1).reshape(D, E * H)
+        h = torch.matmul(x, w1_reshaped).view(T, E, H).transpose(0, 1) + self.b1
         h = torch.nn.functional.gelu(h)
         h = self.dropout(h)
 
@@ -74,12 +78,12 @@ class BatchedExpertMLP(nn.Module):
 
         # Step 3: Fused W2 Projection & Expert Reduction
         # h_weighted: [E, T, H], w2: [E, H, D] -> out: [T, D]
-        # This single einsum computes the final linear projection AND sums over experts (e)
-        out = torch.einsum('eth,ehd->td', h_weighted, self.w2)
+        # Using bmm is faster than einsum
+        out = torch.bmm(h_weighted, self.w2).sum(dim=0)
 
         # Step 4: Add weighted biases
         # p_raw: [T, E], b2: [E, 1, D] -> [T, D]
-        bias_term = torch.einsum('te,ed->td', weights, self.b2.squeeze(1))
+        bias_term = torch.matmul(weights, self.b2.squeeze(1))
         
         return out + bias_term
 
@@ -101,8 +105,6 @@ class MoEFeedForward(nn.Module):
 
     def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         # Dispatch to dense or sparse path based on router type and explicit mode
-        from moe_route.routing.reflected_controller import ReflectedController
-
         if isinstance(self.router, ReflectedController) and getattr(self.router.cfg, "routing_mode", "dense") == "dense":
             return self._forward_dense(x)
         return self._forward_sparse(x)

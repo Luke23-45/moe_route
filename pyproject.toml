@@ -29,6 +29,7 @@ moe-route-prepare-data = "moe_route.cli.prepare_data:main"
 moe-route-eval-ppl = "moe_route.cli.eval_ppl:main"
 moe-route-eval-tasks = "moe_route.cli.eval_tasks:main"
 moe-route-analyze-routing = "moe_route.cli.analyze_routing:main"
+moe-route-routing-stress = "moe_route.cli.routing_stress:main"
 moe-route-sweep = "moe_route.cli.sweep:main"
 
 [build-system]

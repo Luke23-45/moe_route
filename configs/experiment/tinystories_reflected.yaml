@@ -1,5 +1,0 @@
-name: tinystories_reflected
-description: "[LEGACY] TinyStories reflected top-2 MoE (coupled with TopKRouter). Use tinystories_reflected_v2 instead."
-tags:
-  stage: tinystories
-  router: reflected_top2

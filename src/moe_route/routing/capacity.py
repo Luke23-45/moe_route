@@ -25,21 +25,20 @@ class CapacityPolicy:
         device = flat.device
         capacity = self.capacity(expert_indices.shape[0], device)
         
-        # SOTA Fused Capacity Enforcement (No Graph Breaks)
+        raw_load = torch.bincount(flat, minlength=self.num_experts)
+        
+        # Compute token ranks using cumsum on one-hot representation
         one_hot = torch.nn.functional.one_hot(flat, num_classes=self.num_experts)
-        raw_load = one_hot.sum(dim=0)
+        expert_token_ranks = torch.cumsum(one_hot, dim=0) - 1
+        token_ranks = expert_token_ranks.gather(1, flat.unsqueeze(1)).squeeze(1)
 
         if self.drop_tokens:
-            expert_token_ranks = torch.cumsum(one_hot, dim=0) - 1
-            token_ranks = expert_token_ranks.gather(1, flat.unsqueeze(1)).squeeze(1)
             token_capacity = capacity.gather(0, flat)
             valid = token_ranks < token_capacity
         else:
-            expert_token_ranks = torch.cumsum(one_hot, dim=0) - 1
-            token_ranks = expert_token_ranks.gather(1, flat.unsqueeze(1)).squeeze(1)
             valid = torch.ones_like(flat, dtype=torch.bool)
 
-        accepted = (one_hot * valid.unsqueeze(1).long()).sum(dim=0)
+        accepted = torch.bincount(flat[valid], minlength=self.num_experts)
         overflow = (raw_load - capacity).clamp_min(0)
         
         return valid.reshape_as(expert_indices), accepted, raw_load, overflow, token_ranks.reshape_as(expert_indices)

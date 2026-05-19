@@ -20,14 +20,37 @@ from moe_route.utils.progress import training_bar
 from moe_route.utils.seed import seed_everything
 
 
-def _routing_metrics(model: torch.nn.Module) -> dict[str, float]:
+def _routing_metrics(model: torch.nn.Module, input_ids: torch.Tensor | None = None) -> dict[str, float]:
     raw = model.module if hasattr(model, "module") else model
     diagnostics = raw.routing_diagnostics() if hasattr(raw, "routing_diagnostics") else []
     if not diagnostics:
         return {}
     metrics: dict[str, float] = {}
+    
+    # Pre-classify domains if input_ids is provided
+    token_domains = None
+    if input_ids is not None:
+        B, S = input_ids.shape
+        # Count quotation marks (ASCII 34 -> shifted 37)
+        quote_counts = (input_ids == 37).sum(dim=-1)
+        # Punctuation: '.' (49), ',' (47), '?' (66), '!' (36)
+        punct_mask = (input_ids == 49) | (input_ids == 47) | (input_ids == 66) | (input_ids == 36)
+        punct_counts = punct_mask.sum(dim=-1)
+        
+        # Classify domains (0: normal, 1: dialogue, 2: punctuation)
+        is_dialogue = quote_counts >= 4
+        is_punct = (punct_counts >= 11) & (~is_dialogue)
+        
+        domain_labels = torch.zeros(B, dtype=torch.long, device=input_ids.device)
+        domain_labels[is_dialogue] = 1
+        domain_labels[is_punct] = 2
+        
+        # Expand to token level: [B * S]
+        token_domains = domain_labels.unsqueeze(1).expand(-1, S).reshape(-1)
+
     for i, diag in enumerate(diagnostics):
         prefix = f"router/{i}"
+        
         metrics[f"{prefix}/drop_rate"] = float(diag.dropped.detach().cpu())
         metrics[f"{prefix}/dropped_assignments"] = float(diag.dropped_assignments.detach().cpu())
         metrics[f"{prefix}/entropy"] = float(diag.entropy.detach().cpu())
@@ -40,6 +63,51 @@ def _routing_metrics(model: torch.nn.Module) -> dict[str, float]:
             metrics[f"{prefix}/z_loss"] = float(diag.z_loss.detach().cpu())
         if diag.pressure is not None:
             metrics[f"{prefix}/pressure_mean"] = float(diag.pressure.float().mean().detach().cpu())
+
+        # Load Imbalance Metrics (CV and Gini)
+        raw_load = diag.raw_load.float()
+        E = raw_load.numel()
+        mean_raw_load = raw_load.mean()
+        if mean_raw_load > 0:
+            load_cv = float((raw_load.std() / (mean_raw_load + 1e-8)).detach().cpu())
+            # Gini coefficient
+            diff = torch.abs(raw_load.unsqueeze(0) - raw_load.unsqueeze(1))
+            load_gini = float((diff.sum() / (2.0 * E * raw_load.sum() + 1e-8)).detach().cpu())
+        else:
+            load_cv = 0.0
+            load_gini = 0.0
+            
+        metrics[f"{prefix}/load_cv"] = load_cv
+        metrics[f"{prefix}/load_gini"] = load_gini
+
+        # DESI metric
+        if token_domains is not None and "indices" in diag.extra:
+            indices = diag.extra["indices"]  # [T, K]
+            dispatch_mask = diag.extra.get("dispatch_mask")
+            K = indices.shape[-1]
+            token_domains_expanded = token_domains.unsqueeze(1).expand(-1, K).reshape(-1)
+            flat_indices = indices.reshape(-1)
+            if dispatch_mask is not None:
+                flat_mask = dispatch_mask.reshape(-1)
+                token_domains_expanded = token_domains_expanded[flat_mask]
+                flat_indices = flat_indices[flat_mask]
+
+            if flat_indices.numel() == 0:
+                metrics[f"{prefix}/desi"] = 0.0
+                continue
+            
+            # Joint distribution counts of shape [3, E]
+            counts = torch.zeros(3, E, dtype=torch.float, device=indices.device)
+            joint_index = token_domains_expanded * E + flat_indices
+            counts.view(-1).index_add_(0, joint_index, torch.ones_like(joint_index, dtype=torch.float))
+            
+            p_e_given_d = counts / (counts.sum(dim=1, keepdim=True) + 1e-8)
+            p_e = counts.sum(dim=0) / (counts.sum() + 1e-8)
+            
+            ratio = p_e_given_d / (p_e.unsqueeze(0) + 1e-8)
+            kl = (p_e_given_d * torch.log(ratio + 1e-8)).sum(dim=1)
+            metrics[f"{prefix}/desi"] = float(kl.mean().detach().cpu())
+
     return metrics
 
 
@@ -144,6 +212,7 @@ def train(cfg) -> Path | None:
 
     try:
         step = start_step
+        routing_metrics = {}
         for epoch in range(1, max_epochs + 1):
             if step >= max_steps:
                 break
@@ -191,7 +260,8 @@ def train(cfg) -> Path | None:
                         "train/lr": float(scheduler.get_last_lr()[0]),
                         "perf/tokens_per_sec": tokens / elapsed,
                     }
-                    routing_metrics = _routing_metrics(model)
+                    if step % int(cfg.trainer.log_every) == 0 or step == start_step + 1:
+                        routing_metrics = _routing_metrics(model, input_ids)
                     metrics.update(routing_metrics)
 
                     if progress is not None:
@@ -216,6 +286,14 @@ def train(cfg) -> Path | None:
                         if "router/0/entropy" in routing_metrics:
                             postfix["entropy"] = (
                                 f"{routing_metrics['router/0/entropy']:.2f}"
+                            )
+                        if "router/0/load_cv" in routing_metrics:
+                            postfix["cv"] = (
+                                f"{routing_metrics['router/0/load_cv']:.2f}"
+                            )
+                        if "router/0/desi" in routing_metrics:
+                            postfix["desi"] = (
+                                f"{routing_metrics['router/0/desi']:.2f}"
                             )
                         progress.set_postfix(postfix, refresh=False)
                         progress.update(1)

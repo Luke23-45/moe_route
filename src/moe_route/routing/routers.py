@@ -8,7 +8,6 @@ from torch import nn
 
 from moe_route.routing.capacity import CapacityPolicy
 from moe_route.routing.metrics import routing_entropy
-from moe_route.routing.pressure import PressureState, PressureStateConfig
 from moe_route.routing.types import RoutingDiagnostics, RoutingResult
 
 
@@ -23,9 +22,7 @@ class RouterConfig:
     aux_loss_weight: float = 0.01
     z_loss_weight: float = 0.001
     pressure_lr: float = 0.05
-    pressure_alpha: float = 1.0
     pressure_beta: float = 1.0
-    pressure_gamma: float = 0.0
     pressure_decay: float = 0.0
     # Reflected controller (v2) specific fields
     temperature: float = 1.0
@@ -34,6 +31,7 @@ class RouterConfig:
     learnable_bias: bool = True
     # Explicit routing mode selection
     routing_mode: str = "dense"
+    gate_function: str = "softmax"  # "softmax" | "sigmoid"
 
 
 class Router(nn.Module, ABC):
@@ -66,9 +64,9 @@ class TopKRouter(Router):
 
     def forward(self, x: torch.Tensor) -> RoutingResult:
         logits = self.scores(x)
+        top_logits, indices = torch.topk(logits, k=self.cfg.top_k, dim=-1)
+        weights = torch.softmax(top_logits, dim=-1)
         probs = torch.softmax(logits, dim=-1)
-        weights, indices = torch.topk(probs, k=self.cfg.top_k, dim=-1)
-        weights = weights / weights.sum(dim=-1, keepdim=True).clamp_min(1e-8)
 
         dispatch_mask, load, raw_load, overflow, token_ranks = self.capacity.enforce(indices)
         weights = weights * dispatch_mask.to(weights.dtype)
@@ -103,55 +101,14 @@ class TopKRouter(Router):
             capacity_utilization=load.float().sum() / capacity.float().sum().clamp_min(1.0),
             matched_compute_fraction=accepted_assignments / requested_assignments,
             z_loss=z_loss,
+            extra={"indices": indices, "dispatch_mask": dispatch_mask},
         )
         return RoutingResult(indices, weights, dispatch_mask, token_ranks, diagnostics)
-
-
-class ReflectedRouter(TopKRouter):
-    def __init__(self, cfg: RouterConfig) -> None:
-        super().__init__(cfg)
-        self.pressure = PressureState(
-            PressureStateConfig(
-                num_experts=cfg.num_experts,
-                lr=cfg.pressure_lr,
-                alpha=cfg.pressure_alpha,
-                beta=cfg.pressure_beta,
-                gamma=cfg.pressure_gamma,
-                decay=cfg.pressure_decay,
-            )
-        )
-        self._update_stream = None
-
-    def scores(self, x: torch.Tensor) -> torch.Tensor:
-        self.pressure.to(x.device)
-        return self.gate(x) - self.pressure.penalty().to(x.device)
-
-    def forward(self, x: torch.Tensor) -> RoutingResult:
-        result = super().forward(x)
-        if self.training:
-            if x.device.type == "cuda":
-                if self._update_stream is None:
-                    self._update_stream = torch.cuda.Stream(device=x.device)
-                with torch.cuda.stream(self._update_stream):
-                    self.pressure.update(result.diagnostics.raw_load_fraction)
-            else:
-                self.pressure.update(result.diagnostics.raw_load_fraction)
-        result.diagnostics.pressure = self.pressure.q.detach().clone()
-        return result
-
-    def pressure_state_dict(self) -> dict[str, torch.Tensor]:
-        return self.pressure.state_dict()
-
-    def load_pressure_state_dict(self, state: dict[str, torch.Tensor] | None) -> None:
-        if state is not None:
-            self.pressure.load_state_dict(state)
 
 
 def build_router(cfg: RouterConfig) -> Router:
     if cfg.kind == "topk":
         return TopKRouter(cfg)
-    if cfg.kind == "reflected":
-        return ReflectedRouter(cfg)
     if cfg.kind == "reflected_v2":
         from moe_route.routing.reflected_controller import (
             ReflectedController,
@@ -180,6 +137,7 @@ def build_router(cfg: RouterConfig) -> Router:
                 top_k=cfg.top_k if cfg.top_k > 0 else None,
                 capacity_factor=cfg.capacity_factor,
                 drop_tokens=cfg.drop_tokens,
+                gate_function=cfg.gate_function,
             )
         )
     raise ValueError(f"Unknown router kind: {cfg.kind}")

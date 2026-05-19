@@ -24,9 +24,16 @@ def evaluate_tasks(cfg, checkpoint: str) -> dict[str, float]:
         output_path = Path(temp_dir) / "results.json"
         
         model_args = str(adapter.model_args or "")
+        checkpoint_path = Path(checkpoint)
         if "{checkpoint}" in model_args:
             model_args = model_args.format(checkpoint=checkpoint)
         elif not model_args and str(adapter.model) == "hf":
+            if checkpoint_path.suffix in {".pt", ".pth", ".ckpt"}:
+                raise ValueError(
+                    "lm-eval with adapter.model='hf' does not support native training checkpoints directly. "
+                    "Export/wrap the checkpoint into a Hugging Face-compatible model, or provide explicit "
+                    "task_adapter.model_args with the correct adapter."
+                )
             model_args = f"pretrained={checkpoint}"
 
         cmd = [

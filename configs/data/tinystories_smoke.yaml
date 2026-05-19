@@ -12,15 +12,28 @@ cache_tokenized: true
 rebuild_cache: false
 text_field: text
 local_texts:
-  - "Once there was a small cat who learned to share."
-  - "A robot counted stars and wrote a short story."
-  - "The child packed a bag, walked home, and smiled."
-max_samples: 2048
-sequence_length: 128
-batch_size: 4
+  # Normal stories (no quotes, normal punctuation)
+  - "Once upon a time, in a beautiful forest, there was a little bird named Timmy. Timmy loved to fly high in the blue sky and sing sweet songs to the flowers below. Every morning, he would wake up early and visit his friends. The rabbit would hop around, and the squirrel would gather acorns. They spent their days playing together under the warm sun. Timmy was very happy with his life in the forest. As the sun set, they all went back to their homes to sleep."
+  - "A big green train chugged along the silver tracks, passing through hills and over bridges. The driver, a kind man named Bob, waved at everyone he passed. Inside the train, passengers looked out the windows at the scenic view. They saw cows grazing in green fields and rivers flowing gently. The train journey was peaceful and quiet. Everyone enjoyed the slow, relaxing ride to the city. When the train arrived at the station, the passengers got off with smiles on their faces."
+  # Dialogue-heavy stories (high quotation marks count >= 4)
+  - "One day, Max saw a big red balloon. He cried out, \"Look at that beautiful balloon!\" His mother turned and smiled. \"Would you like to have it?\" she asked him. Max jumped up and down. \"Yes, please, I want it so much!\" he shouted. The man selling the balloons handed one to Max. \"Be careful not to let it go,\" the man said with a warm smile. Max nodded and promised, \"I will hold it tight!\" He was so happy with his new toy."
+  - "Lily walked into the kitchen and saw her dad baking a cake. \"What flavor is it?\" Lily asked excitedly. Her dad replied, \"It is chocolate, your absolute favorite!\" Lily clapped her hands. \"Can I help you mix the sugar?\" she requested. \"Sure, grab that spoon over there,\" he answered. Lily picked up the spoon and started mixing. \"This is going to be the best cake ever!\" she declared. Her dad laughed and said, \"I agree with you!\""
+  # Punctuation-heavy stories (high punctuation count >= 11, no quotes)
+  - "Suddenly, the sky turned dark. Rain started to fall. First, a tiny drop, then another, then a heavy downpour! The wind blew loudly, shaking the leaves, bending the branches, and scattering dust everywhere. Is the storm going to stop? No, it grew stronger! Thunder roared. Lightning flashed across the sky. Animals ran for cover. The squirrel hid in the tree hole. The rabbit dug deep into the ground. It was a very wild, scary, and wet afternoon."
+  - "Look at this! Here is a red leaf, there is a yellow flower, and over there is a blue stone. Nature is so colorful! We walked slowly, looked carefully, and listened quietly. Birds chirped. Bees buzzed. Frog leaped! Everything was moving. Did you hear that? Yes, it was the sound of a small river flowing. We sat down, rested our legs, and enjoyed the fresh air. What a wonderful, beautiful, and exciting day in the park!"
+max_samples: 24
+sequence_length: 256
+batch_size: 2
 shuffle: false
 num_workers: 0
 pin_memory: false
 persistent_workers: false
 prefetch_factor: null
 prepare_chunk_sequences: 1024
+holdout_fraction: 0.0
+holdout_seed: 1337
+prepared_split: train
+dynamic_stress: true
+normal_batches: 2
+burst_batches: 1
+seed: 1337

@@ -42,6 +42,8 @@ class ReflectedControllerConfig:
         pressure_decay – optional EMA decay on pressure state
         learnable_bias – whether expert bias b_ℓ is learnable
         z_loss_weight – z-loss on raw gate logits only (0 = off, §4)
+        gate_function – activation for routing: "softmax" (default) or
+                        "sigmoid" (DeepSeek-V3 style independent gates)
     """
 
     d_model: int
@@ -59,13 +61,14 @@ class ReflectedControllerConfig:
     top_k: int | None = None
     capacity_factor: float = 1.25
     drop_tokens: bool = True
+    gate_function: str = "softmax"  # "softmax" | "sigmoid"
 
 
 # ---------------------------------------------------------------------------
 # Reflected Pressure State (self-contained)
 # ---------------------------------------------------------------------------
 
-class ReflectedPressureState:
+class ReflectedPressureState(nn.Module):
     """Nonnegative expert-pressure state with projected dual ascent.
 
     §2: q_e^(n+1) = max(0, q_e^(n) + η·(m_e - c_e))
@@ -76,22 +79,16 @@ class ReflectedPressureState:
     where μ_e is the per-expert target capacity weight (uniform by default).
     """
 
-    def __init__(self, cfg: ReflectedControllerConfig, device: torch.device | str = "cpu") -> None:
+    def __init__(self, cfg: ReflectedControllerConfig) -> None:
+        super().__init__()
         self.cfg = cfg
-        self.device = torch.device(device)
         # Uniform capacity weights: μ_e = 1/E  (§1 line 41-44)
-        self.capacity_weights = torch.full(
-            (cfg.num_experts,), 1.0 / cfg.num_experts,
-            dtype=torch.float32, device=self.device,
+        self.register_buffer(
+            "capacity_weights",
+            torch.full((cfg.num_experts,), 1.0 / cfg.num_experts, dtype=torch.float32)
         )
         # Pressure state: q ∈ ℝ₊^E, initialized to zero
-        self.q = torch.zeros(cfg.num_experts, dtype=torch.float32, device=self.device)
-
-    def to(self, device: torch.device | str) -> ReflectedPressureState:
-        self.device = torch.device(device)
-        self.q = self.q.to(self.device)
-        self.capacity_weights = self.capacity_weights.to(self.device)
-        return self
+        self.register_buffer("q", torch.zeros(cfg.num_experts, dtype=torch.float32))
 
     def penalty(self) -> torch.Tensor:
         """Compute ρ · φ(q) = ρ · q / (μ^β + ε).  (§1 line 56-63)"""
@@ -121,17 +118,6 @@ class ReflectedPressureState:
         # §2 line 110: Π_{[0,∞)}(z) = max{0, z}
         self.q.clamp_(min=0.0)
 
-    def state_dict(self) -> dict[str, torch.Tensor]:
-        return {
-            "q": self.q.detach().clone(),
-            "capacity_weights": self.capacity_weights.detach().clone(),
-        }
-
-    def load_state_dict(self, state: dict[str, torch.Tensor]) -> None:
-        self.q = state["q"].detach().clone().to(self.device)
-        self.capacity_weights = state["capacity_weights"].detach().clone().to(self.device)
-        self.q.clamp_(min=0.0)
-
     def reset(self) -> None:
         self.q.zero_()
 
@@ -150,7 +136,8 @@ class ReflectedController(nn.Module):
     Forward pass (proposition §1-§4):
         1. a = G(x)                              raw affinity
         2. s = a + b − ρ·φ(q)                    reflected score
-        3. p = softmax(s / τ)                     routing distribution
+        3. p = gate(s / τ)                        routing distribution
+           where gate = softmax (default) or sigmoid (DeepSeek-V3)
         4. pressure update: q ← max(0, q + η(m−c)) projected ascent
         5. z-loss on a only (if enabled)          ablation, off by default
 
@@ -169,6 +156,11 @@ class ReflectedController(nn.Module):
             raise ValueError(
                 f"Invalid routing_mode '{cfg.routing_mode}'. "
                 f"Must be one of: 'dense', 'sparse'"
+            )
+        if cfg.gate_function not in ("softmax", "sigmoid"):
+            raise ValueError(
+                f"Invalid gate_function '{cfg.gate_function}'. "
+                f"Must be one of: 'softmax', 'sigmoid'"
             )
 
         if cfg.routing_mode == "sparse":
@@ -199,9 +191,6 @@ class ReflectedController(nn.Module):
         # Reflected pressure state  (§1 line 36-38)
         self.pressure = ReflectedPressureState(cfg)
 
-        # CUDA async stream for pressure updates
-        self._update_stream: torch.cuda.Stream | None = None
-
     def forward(self, x: torch.Tensor) -> RoutingResult:
         """Route tokens to experts with reflected scoring.
 
@@ -214,9 +203,6 @@ class ReflectedController(nn.Module):
         T = x.shape[0]
         E = self.cfg.num_experts
         device = x.device
-
-        # Move pressure state to the correct device
-        self.pressure.to(device)
 
         # ── §1 line 48-49: raw affinity a = G(x) ──
         a = self.gate(x)  # [T, E]
@@ -233,13 +219,7 @@ class ReflectedController(nn.Module):
 
         # ── §2 line 96-107: projected reflected ascent (training only) ──
         if self.training:
-            if device.type == "cuda":
-                if self._update_stream is None:
-                    self._update_stream = torch.cuda.Stream(device=device)
-                with torch.cuda.stream(self._update_stream):
-                    self.pressure.update_from_mass(m, T)
-            else:
-                self.pressure.update_from_mass(m, T)
+            self.pressure.update_from_mass(m, T)
 
         # ── §4 line 176-186: z-loss on RAW gate logits a, NOT pressured s ──
         z_loss = torch.zeros((), device=device)
@@ -251,14 +231,25 @@ class ReflectedController(nn.Module):
         if self.cfg.z_loss_weight > 0:
             result.diagnostics.z_loss = z_loss
 
+        # Ensure diagnostics contain the updated pressure
+        result.diagnostics.pressure = self.pressure.q.detach().clone()
+
         return result
 
     def _route_dense(
         self, s: torch.Tensor, T: int, E: int, device: torch.device
     ) -> tuple[RoutingResult, torch.Tensor]:
         """Mode A: Dense Reflected Routing."""
-        # ── §1 line 66-73: routing distribution p = softmax(s / τ) ──
-        p = torch.softmax(s / self.cfg.temperature, dim=-1)  # [T, E]
+        # ── §1 line 66-73: routing distribution p ──
+        if self.cfg.gate_function == "sigmoid":
+            # DeepSeek-V3 style: independent sigmoid gates, then normalize.
+            # Each expert is gated independently: p_e = σ(s_e / τ)
+            # Pressure penalty directly shifts sigmoid input, cleanly
+            # deactivating overloaded experts without competitive softmax.
+            p_raw = torch.sigmoid(s / self.cfg.temperature)  # [T, E]
+            p = p_raw / p_raw.sum(dim=-1, keepdim=True).clamp_min(1e-8)
+        else:
+            p = torch.softmax(s / self.cfg.temperature, dim=-1)  # [T, E]
 
         # ── §2 line 92-93: routed mass m_e = Σ_t p_{t,e} ──
         m = p.detach().sum(dim=0)  # [E]
@@ -283,6 +274,7 @@ class ReflectedController(nn.Module):
             capacity_utilization=torch.ones((), device=device),
             matched_compute_fraction=torch.ones((), device=device),
             pressure=self.pressure.q.detach().clone(),
+            extra={"indices": indices, "dispatch_mask": dispatch_mask},
         )
         return RoutingResult(indices, p, dispatch_mask, token_ranks, diagnostics), m
 
@@ -290,22 +282,28 @@ class ReflectedController(nn.Module):
         self, s: torch.Tensor, T: int, E: int, device: torch.device
     ) -> tuple[RoutingResult, torch.Tensor]:
         """Mode B: Sparse Reflected Deployment."""
-        # Select top-k scores and renormalize
-        top_scores, indices = torch.topk(s, k=self.cfg.top_k, dim=-1)  # [T, K]
-        combine_weights = torch.softmax(top_scores / self.cfg.temperature, dim=-1)  # [T, K]
+        # Select top-k and compute combine weights
+        if self.cfg.gate_function == "sigmoid":
+            # DeepSeek-V3 style: sigmoid → top-k → renormalize
+            p_sigmoid = torch.sigmoid(s / self.cfg.temperature)  # [T, E]
+            top_weights, indices = torch.topk(p_sigmoid, k=self.cfg.top_k, dim=-1)
+            raw_combine_weights = top_weights / top_weights.sum(dim=-1, keepdim=True).clamp_min(1e-8)
+        else:
+            top_scores, indices = torch.topk(s, k=self.cfg.top_k, dim=-1)  # [T, K]
+            raw_combine_weights = torch.softmax(top_scores / self.cfg.temperature, dim=-1)  # [T, K]
+
+        # Reconstruct full [T, E] raw probabilities for pressure updates (demands)
+        p_raw = torch.zeros_like(s)
+        p_raw.scatter_(dim=-1, index=indices, src=raw_combine_weights)
+        m = p_raw.detach().sum(dim=0)  # [E]
 
         # Apply capacity policy constraints
         dispatch_mask, load, raw_load, overflow, token_ranks = self.capacity.enforce(indices)
-        combine_weights = combine_weights * dispatch_mask.to(combine_weights.dtype)
+        combine_weights = raw_combine_weights * dispatch_mask.to(raw_combine_weights.dtype)
 
         # Renormalize to sum to 1 over active assignments
         denom = combine_weights.sum(dim=-1, keepdim=True)
         combine_weights = torch.where(denom > 0, combine_weights / denom.clamp_min(1e-8), combine_weights)
-
-        # Reconstruct full [T, E] probabilities to compute precise routed mass for pressure updates
-        p_full = torch.zeros_like(s)
-        p_full.scatter_(dim=-1, index=indices, src=combine_weights)
-        m = p_full.detach().sum(dim=0)  # [E]
 
         # Calculate metrics using fractional loads
         load_fraction = load.float() / load.sum().clamp_min(1)
@@ -315,6 +313,13 @@ class ReflectedController(nn.Module):
         accepted_assignments = load.sum().float()
         requested_assignments = raw_load.sum().float().clamp_min(1.0)
 
+        # Full distribution for entropy diagnostic
+        if self.cfg.gate_function == "sigmoid":
+            _p_full = torch.sigmoid(s / self.cfg.temperature)
+            _p_entropy = _p_full / _p_full.sum(dim=-1, keepdim=True).clamp_min(1e-8)
+        else:
+            _p_entropy = torch.softmax(s, dim=-1)
+
         diagnostics = RoutingDiagnostics(
             raw_load=raw_load,
             load=load,
@@ -323,12 +328,13 @@ class ReflectedController(nn.Module):
             capacity=capacity,
             dropped=(~dispatch_mask).all(dim=-1).float().mean(),
             dropped_assignments=(~dispatch_mask).float().mean(),
-            entropy=routing_entropy(torch.softmax(s, dim=-1)),
+            entropy=routing_entropy(_p_entropy),
             overflow=overflow,
             aux_loss=torch.zeros((), device=device),
             capacity_utilization=accepted_assignments / (capacity.sum().clamp_min(1.0)),
             matched_compute_fraction=accepted_assignments / requested_assignments,
             pressure=self.pressure.q.detach().clone(),
+            extra={"indices": indices, "dispatch_mask": dispatch_mask},
         )
 
         return RoutingResult(indices, combine_weights, dispatch_mask, token_ranks, diagnostics), m
@@ -339,3 +345,4 @@ class ReflectedController(nn.Module):
     def load_pressure_state_dict(self, state: dict[str, torch.Tensor] | None) -> None:
         if state is not None:
             self.pressure.load_state_dict(state)
+            self.pressure.q.clamp_(min=0.0)

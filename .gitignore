@@ -14,10 +14,13 @@ mlruns/
 *.ckpt
 *.safetensors
 data/cache/
+docs/dev
 training_logs
 logs.md
+tests
 errors.md
 logs1.md
 logs2.md
 docs/plan/x3.md
 op.md
+scripts/temp_summarize_training_logs.py

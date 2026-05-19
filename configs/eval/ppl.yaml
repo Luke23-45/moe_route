@@ -1,5 +1,6 @@
 name: ppl
 max_batches: 10
+data_split: null
 tasks: []
 task_adapter:
   backend: lm_eval

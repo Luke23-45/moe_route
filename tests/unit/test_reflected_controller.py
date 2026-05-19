@@ -124,7 +124,12 @@ def test_pressure_update_uses_soft_mass() -> None:
     router = ReflectedController(cfg)
     router.train()
 
-    # With soft routing, even the "losing" expert gets some probability mass
+    # Force a deterministic but still soft preference so mass is clearly fractional.
+    with torch.no_grad():
+        router.gate.weight.zero_()
+        router.bias[0] = 0.2
+        router.bias[1] = -0.2
+
     x = torch.randn(8, 4)
     result = router(x)
 
@@ -302,4 +307,3 @@ def test_sparse_moe_e2e() -> None:
     assert moe.last_diagnostics is not None
     assert moe.last_diagnostics.pressure is not None
     assert moe.last_diagnostics.dropped_assignments is not None
-

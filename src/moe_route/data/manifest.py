@@ -43,10 +43,13 @@ def dataset_fingerprint(cfg, tokenizer: TextTokenizer) -> str:
         "dataset_name": cfg.get("dataset_name"),
         "dataset_config": cfg.get("dataset_config"),
         "split": cfg.get("split"),
+        "prepared_split": cfg.get("prepared_split", "train"),
         "streaming": bool(cfg.get("streaming", False)),
         "max_samples": cfg.get("max_samples"),
         "sequence_length": int(cfg.sequence_length),
         "text_field": cfg.get("text_field"),
+        "holdout_fraction": cfg.get("holdout_fraction", 0.0),
+        "holdout_seed": cfg.get("holdout_seed", 1337),
         "tokenizer": tokenizer_fingerprint(tokenizer),
     }
     return hashlib.sha256(json.dumps(fields, sort_keys=True, default=str).encode("utf-8")).hexdigest()

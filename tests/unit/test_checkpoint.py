@@ -29,7 +29,7 @@ def _model() -> DecoderOnlyLM:
             moe_every_n_layers=1,
             num_experts=2,
             expert_hidden_size=32,
-            router=RouterConfig(kind="reflected", d_model=16, num_experts=2, top_k=1),
+            router=RouterConfig(kind="reflected_v2", routing_mode="dense", d_model=16, num_experts=2, top_k=1),
         )
     )
 
@@ -41,6 +41,9 @@ def test_checkpoint_roundtrip_restores_step_and_pressure(tmp_path) -> None:
     optimizer = torch.optim.AdamW(model.parameters(), lr=1e-3)
     scheduler = build_scheduler(optimizer, _Cfg())
     model(torch.randint(0, 255, (2, 8)), torch.randint(0, 255, (2, 8)))
+    pressure_state = model.pressure_state_dict()
+    pressure_state[0][0]["q"] = torch.tensor([0.25, 0.75])
+    model.load_pressure_state_dict(pressure_state)
     path = save_checkpoint(tmp_path / "ckpt.pt", model, optimizer, scheduler, 1, {"seed": 1})
 
     restored = _model()
@@ -49,4 +52,7 @@ def test_checkpoint_roundtrip_restores_step_and_pressure(tmp_path) -> None:
     step = load_checkpoint(path, restored, restored_optimizer, restored_scheduler)
 
     assert step == 1
-    assert restored.pressure_state_dict()[0][0]["q"].sum() > 0
+    assert torch.allclose(
+        restored.pressure_state_dict()[0][0]["q"],
+        torch.tensor([0.25, 0.75]),
+    )

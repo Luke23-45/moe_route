@@ -31,11 +31,11 @@ The `scripts/` launchers discover available Hydra config groups and expose typed
 
 ```powershell
 python scripts/prepare_data.py --data tinystories_smoke --rebuild
-python scripts/launch_train.py --experiment smoke_reflected --data tinystories_smoke --router reflected_top2 --model tiny_moe --set trainer.max_steps=100
+python scripts/launch_train.py --experiment smoke_reflected --data tinystories_smoke --router reflected --model tiny_moe --set trainer.max_steps=100
 python scripts/prepare_data.py --data tinystories
-python scripts/launch_train.py --experiment tinystories_reflected --data tinystories --trainer tinystories --router reflected_top2 --model tiny_moe
+python scripts/launch_train.py --experiment tinystories_reflected_v2 --data tinystories --trainer tinystories --router reflected --model tiny_moe
 python scripts/launch_tinystories_suite.py --epochs 5
-python scripts/launch_train.py --experiment fineweb_reflected_10bt --data fineweb_10bt --router reflected_top2 --nproc-per-node 8 --set trainer.precision=bf16
+python scripts/launch_train.py --experiment fineweb_reflected_10bt --data fineweb_10bt --router reflected --nproc-per-node 8 --set trainer.precision=bf16
 ```
 
 Training automatically validates or prepares packed token shards when `trainer.prepare_data=true`.

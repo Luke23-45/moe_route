@@ -117,6 +117,52 @@ class DecoderOnlyLM(nn.Module):
         self.ln_f = nn.LayerNorm(cfg.d_model)
         self.lm_head = nn.Linear(cfg.d_model, cfg.vocab_size, bias=False)
         self.lm_head.weight = self.token_emb.weight
+        self.reset_parameters()
+
+    def reset_parameters(self) -> None:
+        """Initialize the model with GPT-style small weights.
+
+        PyTorch defaults are too large for a tied embedding/lm_head setup:
+        `nn.Embedding` starts with unit-std weights and `nn.Linear` defaults to
+        Kaiming/uniform init. In a decoder LM this can produce extreme random
+        logits at step 0, so we switch to the standard small-normal
+        initialization used by GPT-family models and scale residual output
+        projections by depth.
+        """
+        init_std = 0.02
+        residual_std = init_std / math.sqrt(2 * self.cfg.n_layers)
+
+        def _init_module(module: nn.Module) -> None:
+            if isinstance(module, nn.Embedding):
+                nn.init.normal_(module.weight, mean=0.0, std=init_std)
+            elif isinstance(module, nn.Linear):
+                if module is self.lm_head and module.weight is self.token_emb.weight:
+                    # The tied LM head shares token_emb.weight, which is already initialized.
+                    if module.bias is not None:
+                        nn.init.zeros_(module.bias)
+                    return
+                nn.init.normal_(module.weight, mean=0.0, std=init_std)
+                if module.bias is not None:
+                    nn.init.zeros_(module.bias)
+            elif isinstance(module, nn.LayerNorm):
+                nn.init.ones_(module.weight)
+                nn.init.zeros_(module.bias)
+
+        self.apply(_init_module)
+
+        for block in self.blocks:
+            nn.init.normal_(block.attn.proj.weight, mean=0.0, std=residual_std)
+            if block.attn.proj.bias is not None:
+                nn.init.zeros_(block.attn.proj.bias)
+
+            if isinstance(block.ff, ExpertMLP):
+                out_proj = block.ff.net[-1]
+                nn.init.normal_(out_proj.weight, mean=0.0, std=residual_std)
+                if out_proj.bias is not None:
+                    nn.init.zeros_(out_proj.bias)
+            elif isinstance(block.ff, MoEFeedForward):
+                nn.init.normal_(block.ff.experts.w2, mean=0.0, std=residual_std)
+                nn.init.zeros_(block.ff.experts.b2)
 
     def forward(
         self, input_ids: torch.Tensor, labels: torch.Tensor | None = None
@@ -168,15 +214,15 @@ def build_model_cfg(cfg) -> ModelConfig:
         aux_loss_weight=float(cfg.router.get("aux_loss_weight", 0.01)),
         z_loss_weight=float(cfg.router.get("z_loss_weight", 0.001)),
         pressure_lr=float(cfg.router.get("pressure_lr", 0.05)),
-        pressure_alpha=float(cfg.router.get("pressure_alpha", 1.0)),
         pressure_beta=float(cfg.router.get("pressure_beta", 1.0)),
-        pressure_gamma=float(cfg.router.get("pressure_gamma", 0.0)),
         pressure_decay=float(cfg.router.get("pressure_decay", 0.0)),
         # Reflected controller (v2) specific fields
         temperature=float(cfg.router.get("temperature", 1.0)),
         pressure_scale=float(cfg.router.get("pressure_scale", 1.0)),
         pressure_eps=float(cfg.router.get("pressure_eps", 1e-8)),
         learnable_bias=bool(cfg.router.get("learnable_bias", True)),
+        routing_mode=str(cfg.router.get("routing_mode", "dense")),
+        gate_function=str(cfg.router.get("gate_function", "softmax")),
     )
     return ModelConfig(
         vocab_size=int(cfg.model.vocab_size),

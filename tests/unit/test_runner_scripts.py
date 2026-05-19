@@ -11,11 +11,18 @@ def test_runner_discovers_config_choices() -> None:
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     assert "smoke_reflected" in module.config_choices("experiment")
+    assert "tinystories_reflected" not in module.config_choices("experiment")
     assert "tinystories_smoke" in module.config_choices("data")
     assert "tinystories" in module.config_choices("data")
     assert "tinystories" in module.config_choices("trainer")
+    assert "reflected_top2" not in module.config_choices("router")
 
 
 def test_tinystories_suite_script_exists() -> None:
     path = Path(__file__).resolve().parents[2] / "scripts" / "launch_tinystories_suite.py"
+    assert path.exists()
+
+
+def test_routing_stress_suite_script_exists() -> None:
+    path = Path(__file__).resolve().parents[2] / "scripts" / "launch_routing_stress_eval.py"
     assert path.exists()

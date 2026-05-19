@@ -216,6 +216,7 @@ def main() -> None:
     parser.add_argument("--nproc-per-node", type=int, default=1)
     parser.add_argument("--skip-prepare", action="store_true")
     parser.add_argument("--rebuild-data", action="store_true")
+    parser.add_argument("--smoke", action="store_true", help="Run in CPU smoke mode")
     parser.add_argument(
         "--set",
         action="append",
@@ -230,9 +231,14 @@ def main() -> None:
     selected = [spec for spec in SUITE if not args.only or spec.name in args.only]
 
     # ── Build common overrides ──
-    common_overrides = ["data=tinystories", "trainer=tinystories", *args.set]
+    data_config = "tinystories_smoke" if args.smoke else "tinystories"
+    trainer_config = "smoke" if args.smoke else "tinystories"
+    common_overrides = [f"data={data_config}", f"trainer={trainer_config}", *args.set]
     if args.epochs is not None:
         common_overrides.append(f"trainer.max_epochs={args.epochs}")
+    if args.smoke:
+        if not any(item.startswith("trainer.max_steps=") for item in args.set):
+            common_overrides.append("trainer.max_steps=20")
     validate_override_syntax(common_overrides)
 
     # ── Print execution plan ──
@@ -256,7 +262,7 @@ def main() -> None:
 
     # ── Prepare data ──
     if not args.skip_prepare:
-        prepare_overrides = ["data=tinystories"]
+        prepare_overrides = [f"data={data_config}"]
         if args.rebuild_data:
             prepare_overrides.append("data.rebuild_cache=true")
         validate_override_syntax(prepare_overrides)

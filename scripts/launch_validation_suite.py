@@ -10,14 +10,14 @@ import torch
 from _runner import module_cmd, run_command
 
 from moe_route.training.checkpoint import load_checkpoint
-from moe_route.evaluation.ppl import evaluate_model_perplexity, load_cfg_from_checkpoint
+from moe_route.evaluation.ppl import build_eval_data_cfg, evaluate_model_perplexity, load_cfg_from_checkpoint
 from moe_route.data.pipeline import build_dataloader
 from moe_route.models.transformer import DecoderOnlyLM, build_model_cfg
 from moe_route.tokenization.tokenizers import build_tokenizer
 from moe_route.evaluation.tasks import evaluate_tasks
 from moe_route.analysis.routing import summarize_routing_run
 
-SUITE = ["dense", "top1", "top2", "reflected"]
+SUITE = ["dense", "top1", "top2", "reflected", "reflected_sparse"]
 
 def get_step(p: Path) -> int:
     try:
@@ -84,7 +84,7 @@ def main() -> None:
 
             csv_path = out_dir / "metrics.csv"
             existing_data = []
-            evaluated_steps = set()
+            evaluated_keys = set()
 
             if csv_path.exists():
                 with open(csv_path, "r", encoding="utf-8") as f:
@@ -98,36 +98,41 @@ def main() -> None:
                             except ValueError:
                                 parsed_row[k] = v
                         existing_data.append(parsed_row)
-                        evaluated_steps.add(int(parsed_row["step"]))
+                        eval_split = str(parsed_row.get("eval_split", ""))
+                        evaluated_keys.add((int(parsed_row["step"]), eval_split))
 
-            pending_checkpoints = [ckpt for ckpt in to_evaluate_pool if get_step(ckpt) not in evaluated_steps]
+            # --- One-Time In-Memory Setup ---
+            print(f"Loading environment for {run_name}...")
+            first_ckpt = to_evaluate_pool[0]
+            eval_cfg = load_cfg_from_checkpoint(first_ckpt)
+            device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+            eval_data_cfg = build_eval_data_cfg(eval_cfg)
+            eval_split = str(eval_data_cfg.get("split", ""))
+            
+            model = None
+            dataloader = None
+            if args.eval_ppl:
+                tokenizer = build_tokenizer(eval_cfg.tokenizer)
+                dataloader = build_dataloader(eval_data_cfg, tokenizer)
+                model = DecoderOnlyLM(build_model_cfg(eval_cfg)).to(device)
+
+            pending_checkpoints = [
+                ckpt for ckpt in to_evaluate_pool if (get_step(ckpt), eval_split) not in evaluated_keys
+            ]
 
             if not pending_checkpoints:
                 print(f"All selected checkpoints for {run_name} have already been evaluated. Skipping.")
                 continue
 
             if args.dry_run:
-                print(f"[DRY-RUN] Would evaluate {len(pending_checkpoints)} checkpoints.")
+                print(f"[DRY-RUN] Would evaluate {len(pending_checkpoints)} checkpoints on split '{eval_split}'.")
                 continue
-
-            # --- One-Time In-Memory Setup ---
-            print(f"Loading environment for {run_name}...")
-            first_ckpt = pending_checkpoints[0]
-            eval_cfg = load_cfg_from_checkpoint(first_ckpt)
-            device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-            
-            model = None
-            dataloader = None
-            if args.eval_ppl:
-                tokenizer = build_tokenizer(eval_cfg.tokenizer)
-                dataloader = build_dataloader(eval_cfg.data, tokenizer)
-                model = DecoderOnlyLM(build_model_cfg(eval_cfg)).to(device)
 
             for ckpt in pending_checkpoints:
                 step = get_step(ckpt)
                 print(f"\n--- Evaluating Checkpoint: {ckpt.name} (Step {step}) ---")
                 
-                row = {"step": step}
+                row = {"step": step, "eval_split": eval_split}
                 
                 if args.eval_ppl:
                     print("Running Perplexity Evaluation...")

@@ -29,11 +29,23 @@ def build_dataloader(
     prepare: bool = True,
 ) -> DataLoader:
     dataset = build_dataset(cfg, tokenizer, prepare=prepare)
-    sampler = (
-        DistributedSampler(dataset, num_replicas=world_size, rank=rank, shuffle=bool(cfg.shuffle))
-        if distributed
-        else None
-    )
+    if bool(cfg.get("dynamic_stress", False)):
+        from moe_route.data.samplers import DynamicStressSampler
+        sampler = DynamicStressSampler(
+            dataset=dataset,
+            batch_size=int(cfg.batch_size),
+            rank=rank,
+            world_size=world_size,
+            seed=int(cfg.get("seed", 1337)),
+            normal_batches=int(cfg.get("normal_batches", 30)),
+            burst_batches=int(cfg.get("burst_batches", 5)),
+        )
+    else:
+        sampler = (
+            DistributedSampler(dataset, num_replicas=world_size, rank=rank, shuffle=bool(cfg.shuffle))
+            if distributed
+            else None
+        )
     kwargs = {
         "batch_size": int(cfg.batch_size),
         "shuffle": bool(cfg.shuffle) and sampler is None,

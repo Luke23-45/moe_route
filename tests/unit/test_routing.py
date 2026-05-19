@@ -21,7 +21,7 @@ def test_topk_router_shapes_and_capacity() -> None:
 
 def test_reflected_router_updates_pressure() -> None:
     router = build_router(
-        RouterConfig(kind="reflected", d_model=8, num_experts=4, top_k=1, pressure_lr=0.5)
+        RouterConfig(kind="reflected_v2", routing_mode="sparse", d_model=8, num_experts=4, top_k=1, pressure_lr=0.5)
     )
     router.train()
     result = router(torch.randn(16, 8))
@@ -31,7 +31,7 @@ def test_reflected_router_updates_pressure() -> None:
 
 def test_reflected_router_uses_raw_load_for_pressure() -> None:
     router = build_router(
-        RouterConfig(kind="reflected", d_model=4, num_experts=2, top_k=1, capacity_factor=0.1)
+        RouterConfig(kind="reflected_v2", routing_mode="sparse", d_model=4, num_experts=2, top_k=1, capacity_factor=0.1)
     )
     with torch.no_grad():
         router.gate.weight.zero_()
