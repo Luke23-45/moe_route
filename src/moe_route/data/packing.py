@@ -83,6 +83,25 @@ class MemoryMappedPackedDataset(Dataset[tuple[torch.Tensor, torch.Tensor]]):
 
 
 def pack_tokens(tokens: torch.Tensor, sequence_length: int) -> torch.Tensor:
+    """Pack a flat token stream into fixed-width training samples.
+
+    WARNING (CROSS-DOCUMENT CONTAMINATION):
+    This function concatenates ALL documents into a single token stream and slices
+    into fixed-width chunks. A single chunk may span MULTIPLE document boundaries
+    (e.g., [...EOS, BOS, ...]). With causal attention (is_causal=True), tokens from
+    document N+1 can attend to document N's tokens within the same packed sample.
+
+    Implications for research:
+    1. The model receives "free" context from unrelated documents, inflating
+       apparent perplexity (easier predictions at document boundaries).
+    2. The loss includes cross-document boundary predictions (predicting next doc's
+       BOS given previous doc's EOS), which are inherently noisy/unpredictable.
+    3. This is the standard GPT-2 approach and is acceptable for controlled
+       comparisons where ALL experiments use the same packing.
+
+    For research-grade accuracy, consider implementing document-boundary attention
+    masking or packing documents individually with padding.
+    """
     if sequence_length < 2:
         raise ValueError("sequence_length must be at least 2.")
     stride = sequence_length + 1

@@ -78,7 +78,15 @@ def select_checkpoints(
 
 
 @torch.no_grad()
-def evaluate_routing_stress(model, dataloader, max_batches: int, device: torch.device) -> dict[str, float]:
+def evaluate_routing_stress(
+    model,
+    dataloader,
+    max_batches: int,
+    device: torch.device,
+    *,
+    ignore_index: int = -100,
+    precision: str = "fp32",
+) -> dict[str, float]:
     model.eval()
     total_nll = 0.0
     total_tokens = 0
@@ -86,18 +94,30 @@ def evaluate_routing_stress(model, dataloader, max_batches: int, device: torch.d
     aux_batches = 0
     router_stats: dict[int, dict[str, list[float] | float]] = {}
 
+    use_amp = precision in {"bf16", "fp16"}
+    amp_dtype = torch.bfloat16 if precision == "bf16" else torch.float16
+
     for batch_idx, (input_ids, labels) in enumerate(dataloader):
         if max_batches > 0 and batch_idx >= max_batches:
             break
-        input_ids = input_ids.to(device)
-        labels = labels.to(device)
-        logits, _, parts = model(input_ids, labels)
+        input_ids = input_ids.to(device, non_blocking=True)
+        labels = labels.to(device, non_blocking=True)
+
+        with torch.autocast(
+            device_type=device.type, dtype=amp_dtype, enabled=use_amp
+        ):
+            logits, _, parts = model(input_ids, labels)
+
         nll = F.cross_entropy(
             logits.reshape(-1, logits.size(-1)),
             labels.reshape(-1),
+            ignore_index=ignore_index,
             reduction="sum",
         )
-        token_count = int(labels.numel())
+        if ignore_index >= 0:
+            token_count = int((labels != ignore_index).sum().item())
+        else:
+            token_count = int(labels.numel())
         total_nll += float(nll.detach().cpu())
         total_tokens += token_count
         if isinstance(parts, dict) and "aux_loss" in parts:
@@ -161,9 +181,12 @@ def evaluate_routing_stress(model, dataloader, max_batches: int, device: torch.d
                     float(diag.pressure.float().mean().detach().cpu()) * token_count
                 )
 
+    mean_loss = total_nll / max(total_tokens, 1)
     metrics = {
-        "eval/loss": total_nll / max(total_tokens, 1),
-        "eval/ppl": math.exp(min(total_nll / max(total_tokens, 1), 20.0)),
+        "eval/loss": mean_loss,
+        "eval/lm_loss": mean_loss,
+        "eval/ppl": math.exp(min(mean_loss, 30.0)),
+        "eval/bpb": mean_loss / math.log(2),
         "eval/tokens": total_tokens,
         "eval/batches": max_batches if max_batches > 0 else 0,
     }
@@ -209,7 +232,13 @@ def evaluate_checkpoint_routing_stress(
     model = DecoderOnlyLM(build_model_cfg(cfg)).to(device)
     load_checkpoint(checkpoint_path, model)
     resolved_max_batches = int(cfg.eval.max_batches if max_batches is None else max_batches)
-    metrics = evaluate_routing_stress(model, dataloader, resolved_max_batches, device)
+    precision = str(cfg.trainer.get("precision", "fp32"))
+    pad_token_id = tokenizer.pad_token_id
+    metrics = evaluate_routing_stress(
+        model, dataloader, resolved_max_batches, device,
+        ignore_index=pad_token_id,
+        precision=precision,
+    )
     metrics["checkpoint"] = str(checkpoint_path)
     metrics["eval_split"] = str(eval_cfg.get("split", ""))
     metrics["prepared_split"] = str(eval_cfg.get("prepared_split", "train"))

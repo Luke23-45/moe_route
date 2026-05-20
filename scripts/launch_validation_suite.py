@@ -115,6 +115,8 @@ def main() -> None:
                 tokenizer = build_tokenizer(eval_cfg.tokenizer)
                 dataloader = build_dataloader(eval_data_cfg, tokenizer)
                 model = DecoderOnlyLM(build_model_cfg(eval_cfg)).to(device)
+                pad_token_id = tokenizer.pad_token_id
+                eval_precision = str(eval_cfg.trainer.get("precision", "fp32"))
 
             pending_checkpoints = [
                 ckpt for ckpt in to_evaluate_pool if (get_step(ckpt), eval_split) not in evaluated_keys
@@ -139,7 +141,12 @@ def main() -> None:
                     model.to(device)
                     load_checkpoint(ckpt, model)
                     max_batches = int(eval_cfg.eval.max_batches)
-                    ppl_metrics = evaluate_model_perplexity(model, dataloader, max_batches, device)
+                    ppl_metrics = evaluate_model_perplexity(
+                        model, dataloader, max_batches, device,
+                        ignore_index=pad_token_id,
+                        precision=eval_precision,
+                        tokenizer=tokenizer,
+                    )
                     row.update(ppl_metrics)
                     print(f"PPL: {ppl_metrics.get('eval/ppl', 'N/A'):.2f}")
                 

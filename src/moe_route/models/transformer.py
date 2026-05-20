@@ -41,6 +41,10 @@ class CausalSelfAttention(nn.Module):
             raise ValueError("d_model must be divisible by n_heads.")
         self.n_heads = n_heads
         self.head_dim = d_model // n_heads
+        assert self.head_dim % 2 == 0, (
+            f"RoPE requires even head_dim, got {self.head_dim} "
+            f"(d_model={d_model}, n_heads={n_heads})"
+        )
         self.qkv = nn.Linear(d_model, 3 * d_model)
         self.proj = nn.Linear(d_model, d_model)
         self.dropout_p = dropout

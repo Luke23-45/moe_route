@@ -39,6 +39,7 @@ def build_dataloader(
             seed=int(cfg.get("seed", 1337)),
             normal_batches=int(cfg.get("normal_batches", 30)),
             burst_batches=int(cfg.get("burst_batches", 5)),
+            tokenizer=tokenizer,
         )
     else:
         sampler = (

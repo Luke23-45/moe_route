@@ -20,6 +20,7 @@ import torch
 from torch import nn
 
 from moe_route.routing.metrics import routing_entropy
+from moe_route.routing.routers import Router
 from moe_route.routing.types import RoutingDiagnostics, RoutingResult
 
 
@@ -126,7 +127,7 @@ class ReflectedPressureState(nn.Module):
 # Reflected Controller Router
 # ---------------------------------------------------------------------------
 
-class ReflectedController(nn.Module):
+class ReflectedController(Router):
     """Standalone Reflected Controller MoE Router.
 
     Computes dense soft routing over ALL experts with reflected pressure
@@ -318,7 +319,7 @@ class ReflectedController(nn.Module):
             _p_full = torch.sigmoid(s / self.cfg.temperature)
             _p_entropy = _p_full / _p_full.sum(dim=-1, keepdim=True).clamp_min(1e-8)
         else:
-            _p_entropy = torch.softmax(s, dim=-1)
+            _p_entropy = torch.softmax(s / self.cfg.temperature, dim=-1)
 
         diagnostics = RoutingDiagnostics(
             raw_load=raw_load,

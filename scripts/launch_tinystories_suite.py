@@ -183,6 +183,10 @@ def build_overrides(
     ]
     if spec.router is not None:
         overrides.append(f"router={spec.router}")
+    # NOTE: The logic here is intentionally "inverted" relative to the variable name.
+    # When skip_prepare=False (default), the suite runs `prepare_data` CLI upfront,
+    # so we tell the trainer NOT to prepare data again (prepare_data=false).
+    # When skip_prepare=True, the suite skips preparation, so the trainer must do it.
     overrides.append(f"trainer.prepare_data={'false' if not skip_prepare else 'true'}")
     overrides.extend(common_overrides)
     return overrides

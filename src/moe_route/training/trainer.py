@@ -10,7 +10,7 @@ from omegaconf import OmegaConf
 from moe_route.data.pipeline import build_dataloader
 from moe_route.data.prepare import prepare_data
 from moe_route.models.transformer import DecoderOnlyLM, build_model_cfg
-from moe_route.tokenization.tokenizers import build_tokenizer
+from moe_route.tokenization.tokenizers import build_tokenizer, resolve_char_token_ids
 from moe_route.tracking.factory import build_tracker
 from moe_route.training.checkpoint import load_checkpoint, save_checkpoint
 from moe_route.training.distributed import cleanup_distributed, init_distributed, wrap_model
@@ -20,33 +20,56 @@ from moe_route.utils.progress import training_bar
 from moe_route.utils.seed import seed_everything
 
 
-def _routing_metrics(model: torch.nn.Module, input_ids: torch.Tensor | None = None) -> dict[str, float]:
+def _routing_metrics(
+    model: torch.nn.Module,
+    input_ids: torch.Tensor | None = None,
+    tokenizer=None,
+) -> dict[str, float]:
     raw = model.module if hasattr(model, "module") else model
     diagnostics = raw.routing_diagnostics() if hasattr(raw, "routing_diagnostics") else []
     if not diagnostics:
         return {}
     metrics: dict[str, float] = {}
     
-    # Pre-classify domains if input_ids is provided
+    # Pre-classify domains if input_ids is provided.
+    # Resolve token IDs from the tokenizer when available; fall back to
+    # ByteTokenizer defaults (byte_value + 3) for backward compatibility.
     token_domains = None
     if input_ids is not None:
-        B, S = input_ids.shape
-        # Count quotation marks (ASCII 34 -> shifted 37)
-        quote_counts = (input_ids == 37).sum(dim=-1)
-        # Punctuation: '.' (49), ',' (47), '?' (66), '!' (36)
-        punct_mask = (input_ids == 49) | (input_ids == 47) | (input_ids == 66) | (input_ids == 36)
-        punct_counts = punct_mask.sum(dim=-1)
-        
-        # Classify domains (0: normal, 1: dialogue, 2: punctuation)
-        is_dialogue = quote_counts >= 4
-        is_punct = (punct_counts >= 11) & (~is_dialogue)
-        
-        domain_labels = torch.zeros(B, dtype=torch.long, device=input_ids.device)
-        domain_labels[is_dialogue] = 1
-        domain_labels[is_punct] = 2
-        
-        # Expand to token level: [B * S]
-        token_domains = domain_labels.unsqueeze(1).expand(-1, S).reshape(-1)
+        if tokenizer is not None:
+            try:
+                char_ids = resolve_char_token_ids(tokenizer, '".,?!')
+                quote_id = char_ids['"']
+                punct_ids = [char_ids[c] for c in '.,?!']
+            except ValueError:
+                # Tokenizer doesn't support single-char encoding; skip domain metrics.
+                quote_id = None
+                punct_ids = []
+        else:
+            # Legacy fallback: ByteTokenizer (byte_value + 3).
+            quote_id = 37
+            punct_ids = [49, 47, 66, 36]
+
+        if quote_id is not None:
+            B, S = input_ids.shape
+            # Count quotation marks
+            quote_counts = (input_ids == quote_id).sum(dim=-1)
+            # Count punctuation marks
+            punct_mask = torch.zeros_like(input_ids, dtype=torch.bool)
+            for pid in punct_ids:
+                punct_mask |= input_ids == pid
+            punct_counts = punct_mask.sum(dim=-1)
+            
+            # Classify domains (0: normal, 1: dialogue, 2: punctuation)
+            is_dialogue = quote_counts >= 4
+            is_punct = (punct_counts >= 11) & (~is_dialogue)
+            
+            domain_labels = torch.zeros(B, dtype=torch.long, device=input_ids.device)
+            domain_labels[is_dialogue] = 1
+            domain_labels[is_punct] = 2
+            
+            # Expand to token level: [B * S]
+            token_domains = domain_labels.unsqueeze(1).expand(-1, S).reshape(-1)
 
     for i, diag in enumerate(diagnostics):
         prefix = f"router/{i}"
@@ -138,8 +161,6 @@ def train(cfg) -> Path | None:
             if ctx.is_main:
                 print("[train] WARNING: CPU autocast strictly supports bfloat16. Switching fp16 to bf16.")
             precision = "bf16"
-        if precision == "fp32":
-            precision = "bf16"
         if compile_enabled:
             if ctx.is_main:
                 print("[train] WARNING: torch.compile requires CUDA. Disabling compile.")
@@ -227,6 +248,7 @@ def train(cfg) -> Path | None:
                     step += 1
                     optimizer.zero_grad(set_to_none=True)
                     total_loss = torch.zeros((), device=ctx.device)
+                    total_aux_loss = torch.zeros((), device=ctx.device)
                     for _ in range(grad_accum):
                         try:
                             input_ids, labels = next(data_iter)
@@ -238,11 +260,12 @@ def train(cfg) -> Path | None:
                         with torch.autocast(
                             device_type=ctx.device.type, dtype=amp_dtype, enabled=use_amp
                         ):
-                            _, loss, _ = model(input_ids, labels)
+                            _, loss, parts = model(input_ids, labels)
                         if loss is None:
                             raise RuntimeError("Training loss was not produced.")
                         scaler.scale(loss / grad_accum).backward()
                         total_loss = total_loss + loss.detach() / grad_accum
+                        total_aux_loss = total_aux_loss + parts["aux_loss"] / grad_accum
 
                     if cfg.trainer.clip_grad_norm is not None:
                         scaler.unscale_(optimizer)
@@ -257,11 +280,16 @@ def train(cfg) -> Path | None:
                     tokens = step * int(cfg.data.batch_size) * int(cfg.data.sequence_length) * grad_accum
                     metrics = {
                         "train/loss": float(total_loss.detach().cpu()),
+                        "train/lm_loss": float((total_loss - total_aux_loss).detach().cpu()),
+                        "train/aux_loss": float(total_aux_loss.detach().cpu()),
                         "train/lr": float(scheduler.get_last_lr()[0]),
                         "perf/tokens_per_sec": tokens / elapsed,
                     }
                     if step % int(cfg.trainer.log_every) == 0 or step == start_step + 1:
-                        routing_metrics = _routing_metrics(model, input_ids)
+                        # NOTE: When grad_accum > 1, input_ids is from the LAST microbatch
+                        # only, so routing diagnostics reflect a single microbatch, not the
+                        # full accumulated batch.
+                        routing_metrics = _routing_metrics(model, input_ids, tokenizer=tokenizer)
                     metrics.update(routing_metrics)
 
                     if progress is not None:

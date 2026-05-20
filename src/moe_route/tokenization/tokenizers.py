@@ -17,6 +17,31 @@ class TextTokenizer(Protocol):
     def decode(self, ids: Iterable[int]) -> str: ...
 
 
+def resolve_char_token_ids(tokenizer: TextTokenizer, chars: str) -> dict[str, int]:
+    """Derive single-character token IDs from any tokenizer.
+
+    Uses ``tokenizer.encode(char, add_special_tokens=False)`` so the result is
+    correct for *any* tokenizer that maps individual characters to single tokens
+    (e.g., ByteTokenizer, character-level tokenizers).
+
+    Raises:
+        ValueError: If a character encodes to != 1 token (e.g., some BPE
+            tokenizers that merge characters into multi-char subwords).
+    """
+    mapping: dict[str, int] = {}
+    for ch in chars:
+        ids = tokenizer.encode(ch, add_special_tokens=False)
+        if len(ids) != 1:
+            raise ValueError(
+                f"Tokenizer encodes '{ch}' (U+{ord(ch):04X}) as {len(ids)} "
+                f"token(s) {ids}. Domain classification requires a tokenizer "
+                f"that maps each target character to exactly one token "
+                f"(e.g., ByteTokenizer)."
+            )
+        mapping[ch] = ids[0]
+    return mapping
+
+
 @dataclass
 class ByteTokenizer:
     pad_token_id: int = 0

@@ -5,7 +5,13 @@ from pathlib import Path
 import torch
 from torch.utils.data import Sampler
 
+from moe_route.tokenization.tokenizers import TextTokenizer, resolve_char_token_ids
+
 logger = logging.getLogger(__name__)
+
+# Characters used for domain classification.
+_QUOTE_CHARS = '"'
+_PUNCT_CHARS = '.,?!'
 
 
 class DynamicStressSampler(Sampler[int]):
@@ -28,6 +34,7 @@ class DynamicStressSampler(Sampler[int]):
         burst_batches: int = 5,
         dialogue_threshold: int = 4,
         punct_threshold: int = 11,
+        tokenizer: TextTokenizer | None = None,
     ) -> None:
         self.dataset = dataset
         self.batch_size = batch_size
@@ -37,6 +44,19 @@ class DynamicStressSampler(Sampler[int]):
         self.epoch = 0
         self.normal_batches = normal_batches
         self.burst_batches = burst_batches
+
+        # Resolve domain-classification token IDs from the tokenizer.
+        # When a tokenizer is provided, we derive IDs dynamically so this
+        # works with *any* byte-level tokenizer, not just the default
+        # ByteTokenizer with its hardcoded offset of 3.
+        if tokenizer is not None:
+            char_ids = resolve_char_token_ids(tokenizer, _QUOTE_CHARS + _PUNCT_CHARS)
+            self._quote_ids = [char_ids[c] for c in _QUOTE_CHARS]
+            self._punct_ids = [char_ids[c] for c in _PUNCT_CHARS]
+        else:
+            # Legacy fallback: ByteTokenizer defaults (byte_value + 3).
+            self._quote_ids = [37]         # '"' = ASCII 34 + 3
+            self._punct_ids = [49, 47, 66, 36]  # '.',',' ,'?','!'
 
         samples_path = getattr(dataset, "path", None)
         cache_path = Path(samples_path).with_suffix(".stress_indices.pt") if samples_path else None
@@ -92,6 +112,20 @@ class DynamicStressSampler(Sampler[int]):
         if self.punct_sharded.numel() == 0:
             raise ValueError("Dynamic stress sampling requires at least one punctuation-heavy sample per rank.")
 
+    def _build_quote_mask(self, tokens: torch.Tensor) -> torch.Tensor:
+        """Build a boolean mask matching any quote token ID."""
+        mask = torch.zeros(tokens.shape, dtype=torch.bool, device=tokens.device)
+        for tid in self._quote_ids:
+            mask |= tokens == tid
+        return mask
+
+    def _build_punct_mask(self, tokens: torch.Tensor) -> torch.Tensor:
+        """Build a boolean mask matching any punctuation token ID."""
+        mask = torch.zeros(tokens.shape, dtype=torch.bool, device=tokens.device)
+        for tid in self._punct_ids:
+            mask |= tokens == tid
+        return mask
+
     def _scan_and_cache(self, dataset, cache_path: Path | None, dialogue_threshold: int, punct_threshold: int) -> None:
         """Scan token indices and cache the results atomically."""
         num_samples = len(dataset)
@@ -110,15 +144,13 @@ class DynamicStressSampler(Sampler[int]):
             for i in range(0, num_samples, chunk_size):
                 end_idx = min(i + chunk_size, num_samples)
                 chunk = samples[i:end_idx]
-                quote_counts[i:end_idx] = (chunk == 37).sum(dim=1).to(torch.int16)
-                punct_mask = (chunk == 49) | (chunk == 47) | (chunk == 66) | (chunk == 36)
-                punct_counts[i:end_idx] = punct_mask.sum(dim=1).to(torch.int16)
+                quote_counts[i:end_idx] = self._build_quote_mask(chunk).sum(dim=1).to(torch.int16)
+                punct_counts[i:end_idx] = self._build_punct_mask(chunk).sum(dim=1).to(torch.int16)
         else:
             for i in range(num_samples):
                 sample, _ = dataset[i]
-                quote_counts[i] = int((sample == 37).sum().item())
-                punct_mask = (sample == 49) | (sample == 47) | (sample == 66) | (sample == 36)
-                punct_counts[i] = int(punct_mask.sum().item())
+                quote_counts[i] = int(self._build_quote_mask(sample).sum().item())
+                punct_counts[i] = int(self._build_punct_mask(sample).sum().item())
 
         # Apply thresholds to create boolean masks
         is_dialogue = quote_counts >= dialogue_threshold

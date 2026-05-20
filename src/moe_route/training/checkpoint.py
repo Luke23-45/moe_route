@@ -86,7 +86,11 @@ def load_checkpoint(path: str | Path, model: nn.Module, optimizer: Optimizer | N
             state_dict[k[len(unwanted_prefix):]] = state_dict.pop(k)
             
     state_dict = migrate_state_dict_to_batched(state_dict)
-    raw_model.load_state_dict(state_dict, strict=False)
+    missing_keys, unexpected_keys = raw_model.load_state_dict(state_dict, strict=False)
+    if missing_keys:
+        print(f"[checkpoint] WARNING: Missing keys in checkpoint (randomly initialized): {missing_keys}")
+    if unexpected_keys:
+        print(f"[checkpoint] WARNING: Unexpected keys in checkpoint (ignored): {unexpected_keys}")
     if payload.get("pressure") is not None and hasattr(raw_model, "load_pressure_state_dict"):
         raw_model.load_pressure_state_dict(payload["pressure"])
     if optimizer is not None and payload.get("optimizer") is not None:

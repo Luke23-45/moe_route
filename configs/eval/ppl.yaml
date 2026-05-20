@@ -1,5 +1,7 @@
 name: ppl
-max_batches: 10
+# 50 batches × 384 batch_size × 256 seq_len ≈ 4.9M tokens (≈1% of TinyStories).
+# Use max_batches: 0 for full evaluation over the entire validation set.
+max_batches: 64
 data_split: null
 tasks: []
 task_adapter:

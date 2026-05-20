@@ -33,13 +33,18 @@ class BatchedExpertMLP(nn.Module):
 
         import math
         for i in range(num_experts):
-            nn.init.kaiming_uniform_(self.w1[i], a=math.sqrt(5))
-            fan_in_1, _ = nn.init._calculate_fan_in_and_fan_out(self.w1[i])
+            # w1[i] is [D, H] used as x @ w1 (transposed relative to nn.Linear convention).
+            # PyTorch's _calculate_fan_in_and_fan_out assumes [out, in] layout, so it
+            # would pick fan_in=H. The actual fan_in is D (shape[0]).
+            # Using mode='fan_out' selects shape[0]=D as the fan dimension.
+            nn.init.kaiming_uniform_(self.w1[i], a=math.sqrt(5), mode='fan_out')
+            fan_in_1 = self.w1[i].shape[0]  # D = actual input dimension
             bound_1 = 1 / math.sqrt(fan_in_1) if fan_in_1 > 0 else 0
             nn.init.uniform_(self.b1[i], -bound_1, bound_1)
 
-            nn.init.kaiming_uniform_(self.w2[i], a=math.sqrt(5))
-            fan_in_2, _ = nn.init._calculate_fan_in_and_fan_out(self.w2[i])
+            # w2[i] is [H, D] used as h @ w2. Actual fan_in is H (shape[0]).
+            nn.init.kaiming_uniform_(self.w2[i], a=math.sqrt(5), mode='fan_out')
+            fan_in_2 = self.w2[i].shape[0]  # H = actual input dimension
             bound_2 = 1 / math.sqrt(fan_in_2) if fan_in_2 > 0 else 0
             nn.init.uniform_(self.b2[i], -bound_2, bound_2)
 
