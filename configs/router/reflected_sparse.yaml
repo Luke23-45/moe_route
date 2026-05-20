@@ -12,5 +12,5 @@ z_loss_weight: 0.0
 aux_loss_weight: 0.0
 # Mode B parameters
 top_k: 2
-capacity_factor: 1.25
+capacity_factor: 0.5
 drop_tokens: true

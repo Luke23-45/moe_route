@@ -225,8 +225,8 @@ def evaluate_checkpoint_routing_stress(
 ) -> dict[str, float | str]:
     checkpoint_path = Path(checkpoint)
     cfg = load_cfg_from_checkpoint(checkpoint_path)
-    eval_cfg = build_eval_data_cfg(cfg)
     tokenizer = build_tokenizer(cfg.tokenizer)
+    eval_cfg = build_eval_data_cfg(cfg, tokenizer=tokenizer)
     dataloader = build_dataloader(eval_cfg, tokenizer)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model = DecoderOnlyLM(build_model_cfg(cfg)).to(device)

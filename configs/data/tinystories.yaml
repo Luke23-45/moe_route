@@ -23,3 +23,7 @@ pin_memory: true
 persistent_workers: true
 prefetch_factor: 2
 prepare_chunk_sequences: 8192
+dynamic_stress: true
+normal_batches: 30
+burst_batches: 5
+

@@ -398,13 +398,43 @@ def evaluate_model_perplexity(
 # Helpers
 # ────────────────────────────────────────────────────────────────────
 
-def build_eval_data_cfg(cfg):
+def _has_prepared_holdout_shard(eval_data_cfg, tokenizer) -> bool:
+    """Check if a prepared holdout validation shard exists on disk with a valid manifest.
+
+    This mirrors how the training pipeline detects and reuses prepared data.
+    Returns True only when the holdout validation binary and its manifest both
+    exist and the manifest fingerprint matches the current config+tokenizer.
+    """
+    if float(eval_data_cfg.get("holdout_fraction", 0.0)) <= 0.0:
+        return False
+    if str(eval_data_cfg.get("split", "")) != "train":
+        return False
+    try:
+        from moe_route.data.manifest import (
+            dataset_fingerprint,
+            prepared_dataset_paths,
+            read_manifest,
+        )
+
+        val_probe = OmegaConf.create(OmegaConf.to_container(eval_data_cfg, resolve=True))
+        val_probe.prepared_split = "validation"
+        samples_path, manifest_path = prepared_dataset_paths(val_probe, tokenizer)
+        if not samples_path.exists() or not manifest_path.exists():
+            return False
+        manifest = read_manifest(manifest_path)
+        return manifest.get("fingerprint") == dataset_fingerprint(val_probe, tokenizer)
+    except Exception:
+        return False
+
+
+def build_eval_data_cfg(cfg, tokenizer=None):
     """Build a data config suitable for evaluation.
 
     Tries to find a validation/test split automatically:
     1. Explicit override via cfg.eval.data_split
-    2. Probing HuggingFace dataset for validation/valid/test splits
-    3. Falling back to holdout fraction from training data
+    2. Pre-prepared holdout validation shard on disk (from training data preparation)
+    3. Probing HuggingFace dataset for validation/valid/test splits
+    4. Falling back to holdout fraction from training data
     """
     eval_data_cfg = OmegaConf.create(OmegaConf.to_container(cfg.data, resolve=True))
     eval_data_cfg.prepared_split = str(eval_data_cfg.get("prepared_split", "train"))
@@ -415,6 +445,17 @@ def build_eval_data_cfg(cfg):
     split_override = cfg.eval.get("data_split", None)
     if split_override is not None:
         eval_data_cfg.split = str(split_override)
+        eval_data_cfg.prepared_split = "validation"
+        return eval_data_cfg
+
+    # Intelligent detection: prefer an already-prepared holdout validation shard
+    # over downloading a native HuggingFace split.  This mirrors how the training
+    # pipeline automatically detects and reuses prepared data.
+    if tokenizer is not None and _has_prepared_holdout_shard(eval_data_cfg, tokenizer):
+        logger.info(
+            "[eval] Found prepared holdout validation shard on disk — using it "
+            "instead of probing for a native HuggingFace split."
+        )
         eval_data_cfg.prepared_split = "validation"
         return eval_data_cfg
 
@@ -454,7 +495,7 @@ def evaluate_perplexity(cfg, checkpoint: str | Path | None = None) -> dict[str, 
     """
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     tokenizer = build_tokenizer(cfg.tokenizer)
-    dataloader = build_dataloader(build_eval_data_cfg(cfg), tokenizer)
+    dataloader = build_dataloader(build_eval_data_cfg(cfg, tokenizer=tokenizer), tokenizer)
     model = DecoderOnlyLM(build_model_cfg(cfg)).to(device)
     if checkpoint is not None:
         load_checkpoint(checkpoint, model)

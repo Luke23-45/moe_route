@@ -12,5 +12,5 @@ z_loss_weight: 0.0
 aux_loss_weight: 0.0
 # Structurally ignored in dense mode, kept for backwards compatibility
 top_k: 1
-capacity_factor: 1.25
+capacity_factor: 0.5
 drop_tokens: true

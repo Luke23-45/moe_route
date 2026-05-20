@@ -1,7 +1,7 @@
 name: top1
 kind: topk
 top_k: 1
-capacity_factor: 1.25
+capacity_factor: 0.5
 drop_tokens: true
 aux_loss_weight: 0.01
 z_loss_weight: 0.001
