@@ -157,14 +157,24 @@ def _progress_postfix(step: int, lr: float, loss_value: float, tokens_per_sec: f
 
 
 def train(cfg) -> Path | None:
+    from moe_route.utils.compile_state import CompileState
+
     seed_everything(int(cfg.seed))
     ctx = init_distributed(cfg)
     run_dir = Path(cfg.artifact_dir) / "runs" / str(cfg.run_name)
     
     # --- Robust Hardware Checks for SOTA Optimizations ---
     precision = str(cfg.trainer.get("precision", "fp32"))
-    compile_enabled = bool(cfg.trainer.get("compile", False))
+    compile_requested = bool(cfg.trainer.get("compile", False))
     compile_mode = cfg.trainer.get("compile_mode", None)
+
+    # Initialize the CompileState state machine. This automatically validates GPU support,
+    # manages dynamic allocations, and configures Inductor & Memory safety parameters.
+    compile_enabled, dynamic_logic_active = CompileState.initialize(
+        compile_requested=compile_requested,
+        device_type=ctx.device.type,
+        is_main=ctx.is_main
+    )
 
     if ctx.device.type == "cuda":
         torch.backends.cuda.matmul.allow_tf32 = True
@@ -177,21 +187,11 @@ def train(cfg) -> Path | None:
             if ctx.is_main:
                 print(f"[train] WARNING: Native bfloat16 requires Compute Capability >= 8.0 (found {capability}). Falling back to fp16.")
             precision = "fp16"
-        
-        if compile_enabled:
-            if capability[0] < 7:
-                if ctx.is_main:
-                    print(f"[train] WARNING: torch.compile requires GPU compute capability >= 7.0 (found {capability}). Disabling compile.")
-                compile_enabled = False
     else:
         if precision == "fp16":
             if ctx.is_main:
                 print("[train] WARNING: CPU autocast strictly supports bfloat16. Switching fp16 to bf16.")
             precision = "bf16"
-        if compile_enabled:
-            if ctx.is_main:
-                print("[train] WARNING: torch.compile requires CUDA. Disabling compile.")
-            compile_enabled = False
             
     try:
         OmegaConf.update(cfg, "trainer.precision", precision, force_add=True)

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import torch
 from torch import nn
+from moe_route.utils.compile_state import conditional_dynamo_disable
 
 from moe_route.routing.routers import Router, RouterConfig, build_router
 from moe_route.routing.types import RoutingDiagnostics
@@ -129,6 +130,7 @@ class MoEFeedForward(nn.Module):
         self.last_diagnostics = route.diagnostics
         return output.reshape(original_shape), route.diagnostics.aux_loss
 
+    @conditional_dynamo_disable
     def _forward_sparse(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         """Sparse top-k routing with scatter/gather dispatch (original path)."""
         original_shape = x.shape

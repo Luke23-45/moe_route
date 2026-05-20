@@ -166,7 +166,7 @@ def evaluate_model_perplexity(
         if 0 < max_batches <= idx:
             break
         input_ids = input_ids.to(device, non_blocking=True)
-        labels = labels.to(device, non_blocking=True)
+        labels = labels.to(device, non_blocking=True).long()
         B, S = labels.shape
 
         with torch.autocast(

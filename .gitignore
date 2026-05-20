@@ -25,3 +25,5 @@ docs/plan/x3.md
 op.md
 scripts/temp_summarize_training_logs.py
 supervior_suggestions.md
+gt_errors.md
+scratch/inspect_config.py

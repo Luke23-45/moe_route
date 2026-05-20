@@ -101,7 +101,7 @@ def evaluate_routing_stress(
         if max_batches > 0 and batch_idx >= max_batches:
             break
         input_ids = input_ids.to(device, non_blocking=True)
-        labels = labels.to(device, non_blocking=True)
+        labels = labels.to(device, non_blocking=True).long()
 
         with torch.autocast(
             device_type=device.type, dtype=amp_dtype, enabled=use_amp
