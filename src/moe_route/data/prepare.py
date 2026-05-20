@@ -94,6 +94,34 @@ def _target_prepared_split(cfg) -> str:
     return str(cfg.get("prepared_split", "train"))
 
 
+def _prepare_stress_cache(cfg, tokenizer: TextTokenizer, prepared: PreparedData) -> None:
+    if not bool(cfg.get("dynamic_stress", False)):
+        return
+
+    from moe_route.data.packing import MemoryMappedPackedDataset
+    from moe_route.data.samplers import DynamicStressSampler
+
+    dataset = MemoryMappedPackedDataset(
+        path=prepared.samples_path,
+        num_samples=prepared.num_samples,
+        sequence_length=prepared.sequence_length,
+    )
+    # Constructing the sampler materializes the shared .stress_indices.pt cache once.
+    # Runtime samplers then only shard and shuffle precomputed index pools.
+    DynamicStressSampler(
+        dataset=dataset,
+        batch_size=int(cfg.batch_size),
+        rank=0,
+        world_size=1,
+        seed=int(cfg.get("seed", 1337)),
+        normal_batches=int(cfg.get("normal_batches", 30)),
+        burst_batches=int(cfg.get("burst_batches", 5)),
+        dialogue_threshold=int(cfg.get("dialogue_threshold", 4)),
+        punct_threshold=int(cfg.get("punct_threshold", 11)),
+        tokenizer=tokenizer,
+    )
+
+
 def _uses_manual_holdout(cfg) -> bool:
     return float(cfg.get("holdout_fraction", 0.0)) > 0.0 and str(cfg.get("split", "")) == "train"
 
@@ -274,7 +302,7 @@ def prepare_data(
     samples_path, manifest_path = prepared_dataset_paths(cfg, tokenizer)
     if _is_ready(cfg, tokenizer, samples_path, manifest_path, honor_rebuild=build_missing):
         manifest = read_manifest(manifest_path)
-        return PreparedData(
+        prepared = PreparedData(
             samples_path=samples_path,
             manifest_path=manifest_path,
             num_samples=int(manifest["num_samples"]),
@@ -282,6 +310,9 @@ def prepare_data(
             reused=True,
             sequence_length=int(manifest["sequence_length"]),
         )
+        if build_missing:
+            _prepare_stress_cache(cfg, tokenizer, prepared)
+        return prepared
     if not build_missing:
         raise FileNotFoundError(
             f"Prepared data for {cfg.name} is missing or stale at {samples_path}. "
@@ -289,12 +320,16 @@ def prepare_data(
         )
     if _uses_manual_holdout(cfg):
         shards = _prepare_holdout_shards(cfg, tokenizer, show_progress=show_progress)
-        return shards[_target_prepared_split(cfg)]
+        prepared = shards[_target_prepared_split(cfg)]
+        _prepare_stress_cache(cfg, tokenizer, prepared)
+        return prepared
 
-    return _prepare_single_shard(
+    prepared = _prepare_single_shard(
         cfg,
         tokenizer,
         samples_path=samples_path,
         manifest_path=manifest_path,
         show_progress=show_progress,
     )
+    _prepare_stress_cache(cfg, tokenizer, prepared)
+    return prepared

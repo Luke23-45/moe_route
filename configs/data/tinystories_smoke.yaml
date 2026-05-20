@@ -29,6 +29,8 @@ num_workers: 0
 pin_memory: false
 persistent_workers: false
 prefetch_factor: null
+in_order: true
+cache_in_memory: false
 prepare_chunk_sequences: 1024
 holdout_fraction: 0.0
 holdout_seed: 1337

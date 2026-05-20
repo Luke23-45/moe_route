@@ -5,6 +5,7 @@ grad_accum_steps: 1
 precision: bf16
 clip_grad_norm: 1.0
 compile: true
+compile_mode: reduce-overhead
 log_every: 10
 eval_every: 0
 checkpoint_every: 4000

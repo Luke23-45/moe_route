@@ -13,9 +13,16 @@ class CapacityPolicy:
     drop_tokens: bool = True
 
     def capacity(self, num_tokens: int, device: torch.device) -> torch.Tensor:
+        return torch.full(
+            (self.num_experts,),
+            self.capacity_per_expert(num_tokens),
+            dtype=torch.long,
+            device=device,
+        )
+
+    def capacity_per_expert(self, num_tokens: int) -> int:
         cap = int(self.capacity_factor * num_tokens * self.top_k / self.num_experts)
-        cap = max(cap, 1)
-        return torch.full((self.num_experts,), cap, dtype=torch.long, device=device)
+        return max(cap, 1)
 
     def enforce(
         self, expert_indices: torch.Tensor
@@ -24,13 +31,21 @@ class CapacityPolicy:
         flat = expert_indices.reshape(-1)
         device = flat.device
         capacity = self.capacity(expert_indices.shape[0], device)
-        
+
         raw_load = torch.bincount(flat, minlength=self.num_experts)
-        
-        # Compute token ranks using cumsum on one-hot representation
-        one_hot = torch.nn.functional.one_hot(flat, num_classes=self.num_experts)
-        expert_token_ranks = torch.cumsum(one_hot, dim=0) - 1
-        token_ranks = expert_token_ranks.gather(1, flat.unsqueeze(1)).squeeze(1)
+
+        # Rank each assignment within its expert without materializing an [N, E] one-hot matrix.
+        # This keeps the hot path linearithmic in the number of assignments instead of O(N * E).
+        order = torch.argsort(flat, stable=True)
+        sorted_flat = flat.index_select(0, order)
+        positions = torch.arange(sorted_flat.numel(), device=device, dtype=torch.long)
+        is_group_start = torch.ones_like(sorted_flat, dtype=torch.bool)
+        is_group_start[1:] = sorted_flat[1:] != sorted_flat[:-1]
+        group_starts = torch.where(is_group_start, positions, torch.zeros_like(positions))
+        group_starts = torch.cummax(group_starts, dim=0).values
+        sorted_ranks = positions - group_starts
+        token_ranks = torch.empty_like(sorted_ranks)
+        token_ranks.scatter_(0, order, sorted_ranks)
 
         if self.drop_tokens:
             token_capacity = capacity.gather(0, flat)
@@ -40,5 +55,5 @@ class CapacityPolicy:
 
         accepted = torch.bincount(flat[valid], minlength=self.num_experts)
         overflow = (raw_load - capacity).clamp_min(0)
-        
+
         return valid.reshape_as(expert_indices), accepted, raw_load, overflow, token_ranks.reshape_as(expert_indices)

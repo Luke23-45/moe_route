@@ -15,3 +15,12 @@ project_name: moe-route
 seed: 1337
 artifact_dir: artifacts
 run_name: ${experiment.name}
+
+# Places for Hydra CLI overrides used by evaluation launchers
+checkpoint_dir: null
+validation_metrics_csv: null
+max_batches: null
+eval_split: null
+output_file: null
+output_md: null
+

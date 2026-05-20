@@ -190,57 +190,49 @@ class DynamicStressSampler(Sampler[int]):
         normal_ptr = 0
         dialogue_ptr = 0
         punct_ptr = 0
-        batches: list[torch.Tensor] = []
 
         # Cycle type: 0: normal, 1: dialogue, 2: normal, 3: punctuation
         cycle_type = 0
         batches_left_in_phase = self.normal_batches
 
-        # Yield exact multiples of self.batch_size until normal pool is exhausted
-        while normal_ptr + self.batch_size <= normal.numel():
-            if cycle_type in (0, 2):  # Normal phase
-                batches.append(normal[normal_ptr:normal_ptr + self.batch_size])
-                normal_ptr += self.batch_size
-                batches_left_in_phase -= 1
-                if batches_left_in_phase == 0:
-                    if cycle_type == 0:
-                        cycle_type = 1
-                        batches_left_in_phase = self.burst_batches
-                    else:
-                        cycle_type = 3
-                        batches_left_in_phase = self.burst_batches
+        def emit_batch(pool: torch.Tensor, ptr: int) -> tuple[list[int], int]:
+            next_ptr = ptr + self.batch_size
+            if next_ptr <= pool.numel():
+                return pool[ptr:next_ptr].tolist(), next_ptr % pool.numel()
+            wrap = next_ptr - pool.numel()
+            batch = torch.cat((pool[ptr:], pool[:wrap]))
+            return batch.tolist(), wrap
 
-            elif cycle_type == 1:  # Dialogue burst phase
-                next_ptr = dialogue_ptr + self.batch_size
-                if next_ptr <= dialogue.numel():
-                    batch = dialogue[dialogue_ptr:next_ptr]
+        def iterator():
+            nonlocal normal_ptr, dialogue_ptr, punct_ptr, cycle_type, batches_left_in_phase
+            while normal_ptr + self.batch_size <= normal.numel():
+                if cycle_type in (0, 2):
+                    batch = normal[normal_ptr:normal_ptr + self.batch_size].tolist()
+                    normal_ptr += self.batch_size
+                    batches_left_in_phase -= 1
+                    if batches_left_in_phase == 0:
+                        if cycle_type == 0:
+                            cycle_type = 1
+                            batches_left_in_phase = self.burst_batches
+                        else:
+                            cycle_type = 3
+                            batches_left_in_phase = self.burst_batches
+                elif cycle_type == 1:
+                    batch, dialogue_ptr = emit_batch(dialogue, dialogue_ptr)
+                    batches_left_in_phase -= 1
+                    if batches_left_in_phase == 0:
+                        cycle_type = 2
+                        batches_left_in_phase = self.normal_batches
                 else:
-                    wrap = next_ptr - dialogue.numel()
-                    batch = torch.cat((dialogue[dialogue_ptr:], dialogue[:wrap]))
-                batches.append(batch)
-                dialogue_ptr = next_ptr % dialogue.numel()
-                batches_left_in_phase -= 1
-                if batches_left_in_phase == 0:
-                    cycle_type = 2
-                    batches_left_in_phase = self.normal_batches
+                    batch, punct_ptr = emit_batch(punct, punct_ptr)
+                    batches_left_in_phase -= 1
+                    if batches_left_in_phase == 0:
+                        cycle_type = 0
+                        batches_left_in_phase = self.normal_batches
 
-            elif cycle_type == 3:  # Punctuation burst phase
-                next_ptr = punct_ptr + self.batch_size
-                if next_ptr <= punct.numel():
-                    batch = punct[punct_ptr:next_ptr]
-                else:
-                    wrap = next_ptr - punct.numel()
-                    batch = torch.cat((punct[punct_ptr:], punct[:wrap]))
-                batches.append(batch)
-                punct_ptr = next_ptr % punct.numel()
-                batches_left_in_phase -= 1
-                if batches_left_in_phase == 0:
-                    cycle_type = 0
-                    batches_left_in_phase = self.normal_batches
+                yield from batch
 
-        if not batches:
-            return iter(())
-        return iter(torch.cat(batches).tolist())
+        return iterator()
 
     def set_epoch(self, epoch: int) -> None:
         self.epoch = epoch

@@ -183,6 +183,8 @@ class DecoderOnlyLM(nn.Module):
         logits = self.lm_head(self.ln_f(x))
         loss = None
         if labels is not None:
+            if labels.dtype != torch.long:
+                labels = labels.long()
             lm_loss = F.cross_entropy(logits.reshape(-1, logits.size(-1)), labels.reshape(-1))
             loss = lm_loss + aux_loss
         return logits, loss, {"aux_loss": aux_loss.detach()}

@@ -15,6 +15,7 @@ def build_dataset(cfg, tokenizer: TextTokenizer, prepare: bool = True):
             path=prepared.samples_path,
             num_samples=prepared.num_samples,
             sequence_length=prepared.sequence_length,
+            cache_in_memory=bool(cfg.get("cache_in_memory", False)),
         )
     corpus = build_corpus(cfg)
     return PackedTokenDataset(corpus.texts(), tokenizer, int(cfg.sequence_length))
@@ -57,4 +58,6 @@ def build_dataloader(
     }
     if cfg.prefetch_factor is not None and int(cfg.num_workers) > 0:
         kwargs["prefetch_factor"] = int(cfg.prefetch_factor)
+    if cfg.get("in_order") is not None and int(cfg.num_workers) > 0:
+        kwargs["in_order"] = bool(cfg.in_order)
     return DataLoader(dataset, **kwargs)

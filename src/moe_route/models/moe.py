@@ -140,37 +140,33 @@ class MoEFeedForward(nn.Module):
         flat_mask = route.dispatch_mask.view(-1)
         token_ranks = route.token_ranks.view(-1)
 
-        cap = max(int(self.router.cfg.capacity_factor * num_tokens * self.router.cfg.top_k / self.router.cfg.num_experts), 1)
+        cap = self.router.capacity.capacity_per_expert(num_tokens)
+        flat_dim = flat.shape[-1]
 
-        dummy_idx = self.num_experts * (cap + 1) - 1
-        safe_token_ranks = token_ranks.clamp(max=cap)
-        flat_buffer_idx = torch.where(
-            flat_mask,
-            flat_indices * (cap + 1) + safe_token_ranks,
-            torch.full_like(flat_indices, dummy_idx)
-        )
+        active_positions = flat_mask.nonzero(as_tuple=False).squeeze(1)
+        active_outputs = torch.zeros(num_tokens * top_k, flat_dim, dtype=flat.dtype, device=flat.device)
 
-        flat_buffer = torch.zeros(self.num_experts * (cap + 1), flat.shape[-1], dtype=flat.dtype, device=flat.device)
-        
-        # SOTA Zero-Copy Fast Path for top_k=1 (avoids memory allocation)
-        if top_k == 1:
-            flat_buffer.index_add_(0, flat_buffer_idx, flat)
-        else:
-            flat_buffer.index_add_(0, flat_buffer_idx, flat.repeat_interleave(top_k, dim=0))
+        if active_positions.numel() > 0:
+            active_experts = flat_indices.index_select(0, active_positions)
+            active_ranks = token_ranks.index_select(0, active_positions)
+            active_tokens = torch.div(active_positions, top_k, rounding_mode="floor")
+            active_buffer_idx = active_experts * cap + active_ranks
 
-        buffer = flat_buffer.view(self.num_experts, cap + 1, flat.shape[-1])
-        
-        buffer_out = torch.zeros_like(buffer)
-        buffer_out[:, :cap, :] = self.experts(buffer[:, :cap, :])
+            flat_buffer = torch.zeros(
+                self.num_experts * cap,
+                flat_dim,
+                dtype=flat.dtype,
+                device=flat.device,
+            )
+            flat_buffer.index_copy_(0, active_buffer_idx, flat.index_select(0, active_tokens))
 
-        flat_buffer_out = buffer_out.view(self.num_experts * (cap + 1), flat.shape[-1])
-        expert_out = flat_buffer_out.index_select(0, flat_buffer_idx)
+            buffer = flat_buffer.view(self.num_experts, cap, flat_dim)
+            buffer_out = self.experts(buffer)
+            expert_out = buffer_out.view(self.num_experts * cap, flat_dim).index_select(0, active_buffer_idx)
+            active_outputs.index_copy_(0, active_positions, expert_out)
 
-        # Weights are already zeroed for dropped tokens by the router!
         weights = route.combine_weights.view(-1)
-        expert_out = expert_out * weights.unsqueeze(-1)
-
-        output = expert_out.view(num_tokens, top_k, flat.shape[-1])
+        output = (active_outputs * weights.unsqueeze(-1)).view(num_tokens, top_k, flat_dim)
         if top_k == 1:
             output = output.squeeze(1)
         else:

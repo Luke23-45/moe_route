@@ -134,6 +134,28 @@ def _routing_metrics(
     return metrics
 
 
+def _progress_postfix(step: int, lr: float, loss_value: float, tokens_per_sec: float, routing_metrics: dict[str, float]) -> dict[str, str | int]:
+    postfix: dict[str, str | int] = {
+        "step": step,
+        "loss": f"{loss_value:.3f}",
+        "lr": f"{lr:.2e}",
+        "tok/s": f"{tokens_per_sec:.0f}",
+    }
+    if "router/0/matched_compute_fraction" in routing_metrics:
+        postfix["compute"] = f"{routing_metrics['router/0/matched_compute_fraction']:.2f}"
+    if "router/0/drop_rate" in routing_metrics:
+        postfix["drop"] = f"{routing_metrics['router/0/drop_rate']:.3f}"
+    if "router/0/capacity_utilization" in routing_metrics:
+        postfix["cap"] = f"{routing_metrics['router/0/capacity_utilization']:.2f}"
+    if "router/0/entropy" in routing_metrics:
+        postfix["entropy"] = f"{routing_metrics['router/0/entropy']:.2f}"
+    if "router/0/load_cv" in routing_metrics:
+        postfix["cv"] = f"{routing_metrics['router/0/load_cv']:.2f}"
+    if "router/0/desi" in routing_metrics:
+        postfix["desi"] = f"{routing_metrics['router/0/desi']:.2f}"
+    return postfix
+
+
 def train(cfg) -> Path | None:
     seed_everything(int(cfg.seed))
     ctx = init_distributed(cfg)
@@ -142,8 +164,13 @@ def train(cfg) -> Path | None:
     # --- Robust Hardware Checks for SOTA Optimizations ---
     precision = str(cfg.trainer.get("precision", "fp32"))
     compile_enabled = bool(cfg.trainer.get("compile", False))
+    compile_mode = cfg.trainer.get("compile_mode", None)
 
     if ctx.device.type == "cuda":
+        torch.backends.cuda.matmul.allow_tf32 = True
+        torch.backends.cudnn.allow_tf32 = True
+        torch.backends.cudnn.benchmark = True
+        torch.set_float32_matmul_precision("high")
         capability = torch.cuda.get_device_capability()
         # bf16 requires Ampere (8.0) or higher for hardware acceleration
         if precision == "bf16" and (capability[0] < 8 or not torch.cuda.is_bf16_supported()):
@@ -203,7 +230,10 @@ def train(cfg) -> Path | None:
     )
     model = DecoderOnlyLM(build_model_cfg(cfg)).to(ctx.device)
     if compile_enabled:
-        model = torch.compile(model)
+        compile_kwargs = {}
+        if compile_mode is not None:
+            compile_kwargs["mode"] = str(compile_mode)
+        model = torch.compile(model, **compile_kwargs)
     model = wrap_model(model, ctx, bool(cfg.distributed.find_unused_parameters))
     optimizer = build_optimizer(model.parameters(), cfg)
     scheduler = build_scheduler(optimizer, cfg)
@@ -234,6 +264,8 @@ def train(cfg) -> Path | None:
     try:
         step = start_step
         routing_metrics = {}
+        latest_postfix: dict[str, str | int] | None = None
+        log_every = int(cfg.trainer.log_every)
         for epoch in range(1, max_epochs + 1):
             if step >= max_steps:
                 break
@@ -276,58 +308,40 @@ def train(cfg) -> Path | None:
                     scaler.update()
                     scheduler.step()
 
-                    elapsed = max(time.perf_counter() - started, 1e-6)
-                    tokens = step * int(cfg.data.batch_size) * int(cfg.data.sequence_length) * grad_accum
-                    metrics = {
-                        "train/loss": float(total_loss.detach().cpu()),
-                        "train/lm_loss": float((total_loss - total_aux_loss).detach().cpu()),
-                        "train/aux_loss": float(total_aux_loss.detach().cpu()),
-                        "train/lr": float(scheduler.get_last_lr()[0]),
-                        "perf/tokens_per_sec": tokens / elapsed,
-                    }
-                    if step % int(cfg.trainer.log_every) == 0 or step == start_step + 1:
+                    should_log = step % log_every == 0 or step == start_step + 1
+
+                    if should_log:
+                        elapsed = max(time.perf_counter() - started, 1e-6)
+                        tokens = step * int(cfg.data.batch_size) * int(cfg.data.sequence_length) * grad_accum
+                        loss_value = float(total_loss.detach().cpu())
+                        aux_value = float(total_aux_loss.detach().cpu())
+                        lr_value = float(scheduler.get_last_lr()[0])
+                        metrics = {
+                            "train/loss": loss_value,
+                            "train/lm_loss": loss_value - aux_value,
+                            "train/aux_loss": aux_value,
+                            "train/lr": lr_value,
+                            "perf/tokens_per_sec": tokens / elapsed,
+                        }
                         # NOTE: When grad_accum > 1, input_ids is from the LAST microbatch
                         # only, so routing diagnostics reflect a single microbatch, not the
                         # full accumulated batch.
                         routing_metrics = _routing_metrics(model, input_ids, tokenizer=tokenizer)
-                    metrics.update(routing_metrics)
+                        metrics.update(routing_metrics)
+                        latest_postfix = _progress_postfix(
+                            step=step,
+                            lr=lr_value,
+                            loss_value=loss_value,
+                            tokens_per_sec=metrics["perf/tokens_per_sec"],
+                            routing_metrics=routing_metrics,
+                        )
+                        if tracker is not None:
+                            tracker.log_metrics(metrics, step)
 
                     if progress is not None:
-                        postfix = {
-                            "step": step,
-                            "loss": f"{metrics['train/loss']:.3f}",
-                            "lr": f"{metrics['train/lr']:.2e}",
-                            "tok/s": f"{metrics['perf/tokens_per_sec']:.0f}",
-                        }
-                        if "router/0/matched_compute_fraction" in routing_metrics:
-                            postfix["compute"] = (
-                                f"{routing_metrics['router/0/matched_compute_fraction']:.2f}"
-                            )
-                        if "router/0/drop_rate" in routing_metrics:
-                            postfix["drop"] = (
-                                f"{routing_metrics['router/0/drop_rate']:.3f}"
-                            )
-                        if "router/0/capacity_utilization" in routing_metrics:
-                            postfix["cap"] = (
-                                f"{routing_metrics['router/0/capacity_utilization']:.2f}"
-                            )
-                        if "router/0/entropy" in routing_metrics:
-                            postfix["entropy"] = (
-                                f"{routing_metrics['router/0/entropy']:.2f}"
-                            )
-                        if "router/0/load_cv" in routing_metrics:
-                            postfix["cv"] = (
-                                f"{routing_metrics['router/0/load_cv']:.2f}"
-                            )
-                        if "router/0/desi" in routing_metrics:
-                            postfix["desi"] = (
-                                f"{routing_metrics['router/0/desi']:.2f}"
-                            )
-                        progress.set_postfix(postfix, refresh=False)
+                        if latest_postfix is not None:
+                            progress.set_postfix(latest_postfix, refresh=False)
                         progress.update(1)
-
-                    if tracker is not None and step % int(cfg.trainer.log_every) == 0:
-                        tracker.log_metrics(metrics, step)
 
                     if (
                         ctx.is_main

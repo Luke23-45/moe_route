@@ -18,11 +18,13 @@ prepared_split: train
 sequence_length: 256
 batch_size: 768
 shuffle: false
-num_workers: 2
+num_workers: 4
 pin_memory: true
 persistent_workers: true
-prefetch_factor: 2
+prefetch_factor: 4
+in_order: false
+cache_in_memory: true
 prepare_chunk_sequences: 8192
-dynamic_stress: false
+dynamic_stress: true
 normal_batches: 30
 burst_batches: 5

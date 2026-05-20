@@ -53,27 +53,30 @@ class MemoryMappedPackedDataset(Dataset[tuple[torch.Tensor, torch.Tensor]]):
         num_samples: int,
         sequence_length: int,
         dtype: torch.dtype = torch.int32,
+        cache_in_memory: bool = False,
     ) -> None:
         self.path = str(path)
         self.num_samples = int(num_samples)
         self.sequence_length = int(sequence_length)
         self.width = self.sequence_length + 1
         self.dtype = dtype
+        self.cache_in_memory = bool(cache_in_memory)
         self.samples: torch.Tensor | None = None
 
     def _ensure_open(self) -> torch.Tensor:
         if self.samples is None:
             size = self.num_samples * self.width
-            self.samples = torch.from_file(self.path, shared=False, size=size, dtype=self.dtype).view(
+            samples = torch.from_file(self.path, shared=False, size=size, dtype=self.dtype).view(
                 self.num_samples, self.width
             )
+            self.samples = samples.clone().contiguous() if self.cache_in_memory else samples
         return self.samples
 
     def __len__(self) -> int:
         return self.num_samples
 
     def __getitem__(self, index: int) -> tuple[torch.Tensor, torch.Tensor]:
-        sample = self._ensure_open()[index].long()
+        sample = self._ensure_open()[index]
         return sample[:-1], sample[1:]
 
     def __getstate__(self) -> dict[str, object]:

@@ -22,4 +22,6 @@ num_workers: 4
 pin_memory: true
 persistent_workers: true
 prefetch_factor: 2
+in_order: false
+cache_in_memory: false
 prepare_chunk_sequences: 8192
