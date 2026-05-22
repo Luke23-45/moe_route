@@ -25,7 +25,8 @@ class CapacityPolicy:
         return max(cap, 1)
 
     def enforce(
-        self, expert_indices: torch.Tensor
+        self, expert_indices: torch.Tensor,
+        priorities: torch.Tensor | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         """Return valid dispatch mask, accepted load, raw selected load, overflow counts, and token ranks."""
         flat = expert_indices.reshape(-1)
@@ -34,9 +35,23 @@ class CapacityPolicy:
 
         raw_load = torch.bincount(flat, minlength=self.num_experts)
 
-        # Rank each assignment within its expert without materializing an [N, E] one-hot matrix.
-        # This keeps the hot path linearithmic in the number of assignments instead of O(N * E).
-        order = torch.argsort(flat, stable=True)
+        # Rank assignments within each expert. When routing priorities are supplied,
+        # capacity is awarded to the strongest assignments instead of arbitrary token
+        # order; this removes a sequence-order bottleneck in sparse dispatch.
+        if priorities is not None:
+            if priorities.shape != expert_indices.shape:
+                raise ValueError(
+                    f"priorities shape {tuple(priorities.shape)} must match "
+                    f"expert_indices shape {tuple(expert_indices.shape)}"
+                )
+            flat_priorities = priorities.reshape(-1)
+            priority_order = torch.argsort(-flat_priorities, stable=True)
+            priority_sorted_experts = flat.index_select(0, priority_order)
+            expert_order = torch.argsort(priority_sorted_experts, stable=True)
+            order = priority_order.index_select(0, expert_order)
+        else:
+            order = torch.argsort(flat, stable=True)
+
         sorted_flat = flat.index_select(0, order)
         positions = torch.arange(sorted_flat.numel(), device=device, dtype=torch.long)
         is_group_start = torch.ones_like(sorted_flat, dtype=torch.bool)

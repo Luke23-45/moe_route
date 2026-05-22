@@ -7,8 +7,9 @@ __pycache__/
 .hydra/
 outputs/
 multirun/
-artifacts/
+# artifacts/
 mlruns/
+artifacts
 *.pt
 *.pth
 *.ckpt
@@ -27,3 +28,5 @@ scripts/temp_summarize_training_logs.py
 supervior_suggestions.md
 gt_errors.md
 scratch/inspect_config.py
+docs/dev/b3.md
+scratch/analysis_output.txt

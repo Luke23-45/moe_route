@@ -289,17 +289,20 @@ class ReflectedController(Router):
             p_sigmoid = torch.sigmoid(s / self.cfg.temperature)  # [T, E]
             top_weights, indices = torch.topk(p_sigmoid, k=self.cfg.top_k, dim=-1)
             raw_combine_weights = top_weights / top_weights.sum(dim=-1, keepdim=True).clamp_min(1e-8)
+            priorities = top_weights
         else:
             top_scores, indices = torch.topk(s, k=self.cfg.top_k, dim=-1)  # [T, K]
             raw_combine_weights = torch.softmax(top_scores / self.cfg.temperature, dim=-1)  # [T, K]
-
-        # Reconstruct full [T, E] raw probabilities for pressure updates (demands)
-        p_raw = torch.zeros_like(s)
-        p_raw.scatter_(dim=-1, index=indices, src=raw_combine_weights)
-        m = p_raw.detach().sum(dim=0)  # [E]
+            priorities = top_scores
 
         # Apply capacity policy constraints
-        dispatch_mask, load, raw_load, overflow, token_ranks = self.capacity.enforce(indices)
+        dispatch_mask, load, raw_load, overflow, token_ranks = self.capacity.enforce(
+            indices,
+            priorities=priorities,
+        )
+        # Sparse capacity is slot-based, so pressure must see selected-slot demand.
+        # Scaling by K keeps total pressure mass equal to T, matching dense mode.
+        m = raw_load.detach().to(dtype=s.dtype) / float(self.cfg.top_k)
         combine_weights = raw_combine_weights * dispatch_mask.to(raw_combine_weights.dtype)
 
         # Renormalize to sum to 1 over active assignments
