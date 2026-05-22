@@ -1,20 +1,20 @@
-name: tinystories
-max_epochs: 10
-max_steps: 1000000
+name: tinystories_fast
+max_epochs: null
+max_steps: 20000
 grad_accum_steps: 1
 precision: bf16
 clip_grad_norm: 1.0
 compile: true
 compile_mode: reduce-overhead
-log_every: 10
-routing_metrics_every: 100
+log_every: 50
+routing_metrics_every: 500
 eval_every: 0
-checkpoint_every: 4000
-save_dir: artifacts/checkpoints/tinystories
+checkpoint_every: 5000
+save_dir: artifacts/checkpoints/tinystories_fast
 resume_from: null
 prepare_data: true
 progress:
   enabled: true
   dynamic_ncols: true
   leave: true
-  mininterval: 0.5
+  mininterval: 1.0

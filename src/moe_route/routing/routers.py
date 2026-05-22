@@ -68,10 +68,7 @@ class TopKRouter(Router):
         weights = torch.softmax(top_logits, dim=-1)
         probs = torch.softmax(logits, dim=-1)
 
-        dispatch_mask, load, raw_load, overflow, token_ranks = self.capacity.enforce(
-            indices,
-            priorities=top_logits,
-        )
+        dispatch_mask, load, raw_load, overflow, token_ranks = self.capacity.enforce(indices)
         weights = weights * dispatch_mask.to(weights.dtype)
         denom = weights.sum(dim=-1, keepdim=True)
         weights = torch.where(denom > 0, weights / denom.clamp_min(1e-8), weights)

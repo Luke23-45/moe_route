@@ -264,6 +264,23 @@ def test_sparse_shapes() -> None:
     assert result.diagnostics.entropy > 0.0, "entropy should be non-zero"
 
 
+def test_sparse_reflected_capacity_prefers_high_priority_assignments() -> None:
+    router = _make_controller(num_experts=1, routing_mode="sparse", top_k=1, capacity_factor=0.5)
+    indices = torch.zeros(4, 1, dtype=torch.long)
+    priorities = torch.tensor([[0.1], [0.9], [0.2], [0.8]])
+
+    dispatch_mask, load, raw_load, overflow, token_ranks = router._enforce_reflected_capacity(
+        indices,
+        priorities,
+    )
+
+    assert dispatch_mask.squeeze(-1).tolist() == [False, True, False, True]
+    assert token_ranks.squeeze(-1).tolist() == [3, 0, 2, 1]
+    assert load.tolist() == [2]
+    assert raw_load.tolist() == [4]
+    assert overflow.tolist() == [2]
+
+
 def test_invalid_routing_mode_raises() -> None:
     """ReflectedControllerConfig with invalid routing_mode raises ValueError."""
     with pytest.raises(ValueError, match="Invalid routing_mode"):

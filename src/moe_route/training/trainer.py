@@ -235,6 +235,17 @@ def train(cfg) -> Path | None:
             compile_kwargs["mode"] = str(compile_mode)
         model = torch.compile(model, **compile_kwargs)
     model = wrap_model(model, ctx, bool(cfg.distributed.find_unused_parameters))
+    grad_accum = int(cfg.trainer.grad_accum_steps)
+    steps_per_epoch = max(len(dataloader) // grad_accum, 1)
+    configured_epochs = cfg.trainer.get("max_epochs")
+    max_epochs = (
+        int(configured_epochs)
+        if configured_epochs is not None
+        else max((int(cfg.trainer.max_steps) + steps_per_epoch - 1) // steps_per_epoch, 1)
+    )
+    max_steps = min(int(cfg.trainer.max_steps), max_epochs * steps_per_epoch)
+    OmegaConf.update(cfg, "trainer.max_steps", max_steps, force_add=True)
+
     optimizer = build_optimizer(model.parameters(), cfg)
     scheduler = build_scheduler(optimizer, cfg)
 
@@ -246,15 +257,6 @@ def train(cfg) -> Path | None:
         tracker.log_params(OmegaConf.to_container(cfg, resolve=True))
 
     model.train()
-    grad_accum = int(cfg.trainer.grad_accum_steps)
-    max_steps = int(cfg.trainer.max_steps)
-    steps_per_epoch = max(len(dataloader) // grad_accum, 1)
-    configured_epochs = cfg.trainer.get("max_epochs")
-    max_epochs = (
-        int(configured_epochs)
-        if configured_epochs is not None
-        else max((max_steps + steps_per_epoch - 1) // steps_per_epoch, 1)
-    )
     use_amp = precision in {"bf16", "fp16"}
     amp_dtype = torch.bfloat16 if precision == "bf16" else torch.float16
     scaler = torch.amp.GradScaler("cuda", enabled=use_amp and amp_dtype is torch.float16 and ctx.device.type == "cuda")
@@ -266,6 +268,7 @@ def train(cfg) -> Path | None:
         routing_metrics = {}
         latest_postfix: dict[str, str | int] | None = None
         log_every = int(cfg.trainer.log_every)
+        routing_metrics_every = int(cfg.trainer.get("routing_metrics_every", log_every))
         for epoch in range(1, max_epochs + 1):
             if step >= max_steps:
                 break
@@ -309,6 +312,10 @@ def train(cfg) -> Path | None:
                     scheduler.step()
 
                     should_log = step % log_every == 0 or step == start_step + 1
+                    should_log_routing = should_log and (
+                        routing_metrics_every > 0
+                        and (step % routing_metrics_every == 0 or step == start_step + 1)
+                    )
 
                     if should_log:
                         elapsed = max(time.perf_counter() - started, 1e-6)
@@ -323,11 +330,12 @@ def train(cfg) -> Path | None:
                             "train/lr": lr_value,
                             "perf/tokens_per_sec": tokens / elapsed,
                         }
-                        # NOTE: When grad_accum > 1, input_ids is from the LAST microbatch
-                        # only, so routing diagnostics reflect a single microbatch, not the
-                        # full accumulated batch.
-                        routing_metrics = _routing_metrics(model, input_ids, tokenizer=tokenizer)
-                        metrics.update(routing_metrics)
+                        if should_log_routing:
+                            # NOTE: When grad_accum > 1, input_ids is from the LAST microbatch
+                            # only, so routing diagnostics reflect a single microbatch, not the
+                            # full accumulated batch.
+                            routing_metrics = _routing_metrics(model, input_ids, tokenizer=tokenizer)
+                            metrics.update(routing_metrics)
                         latest_postfix = _progress_postfix(
                             step=step,
                             lr=lr_value,

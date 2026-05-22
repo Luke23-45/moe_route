@@ -295,8 +295,9 @@ class ReflectedController(Router):
             raw_combine_weights = torch.softmax(top_scores / self.cfg.temperature, dim=-1)  # [T, K]
             priorities = top_scores
 
-        # Apply capacity policy constraints
-        dispatch_mask, load, raw_load, overflow, token_ranks = self.capacity.enforce(
+        # Apply reflected-specific prioritized capacity constraints. This is kept
+        # local to the proposed router so baseline TopKRouter remains standard.
+        dispatch_mask, load, raw_load, overflow, token_ranks = self._enforce_reflected_capacity(
             indices,
             priorities=priorities,
         )
@@ -342,6 +343,56 @@ class ReflectedController(Router):
         )
 
         return RoutingResult(indices, combine_weights, dispatch_mask, token_ranks, diagnostics), m
+
+    def _enforce_reflected_capacity(
+        self,
+        expert_indices: torch.Tensor,
+        priorities: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        """Reflected sparse capacity admission, isolated from baseline routers."""
+        if priorities.shape != expert_indices.shape:
+            raise ValueError(
+                f"priorities shape {tuple(priorities.shape)} must match "
+                f"expert_indices shape {tuple(expert_indices.shape)}"
+            )
+
+        flat = expert_indices.reshape(-1)
+        flat_priorities = priorities.reshape(-1)
+        device = flat.device
+        capacity = self.capacity.capacity(expert_indices.shape[0], device)
+        raw_load = torch.bincount(flat, minlength=self.cfg.num_experts)
+
+        priority_order = torch.argsort(-flat_priorities, stable=True)
+        priority_sorted_experts = flat.index_select(0, priority_order)
+        expert_order = torch.argsort(priority_sorted_experts, stable=True)
+        order = priority_order.index_select(0, expert_order)
+
+        sorted_flat = flat.index_select(0, order)
+        positions = torch.arange(sorted_flat.numel(), device=device, dtype=torch.long)
+        is_group_start = torch.ones_like(sorted_flat, dtype=torch.bool)
+        is_group_start[1:] = sorted_flat[1:] != sorted_flat[:-1]
+        group_starts = torch.where(is_group_start, positions, torch.zeros_like(positions))
+        group_starts = torch.cummax(group_starts, dim=0).values
+        sorted_ranks = positions - group_starts
+        token_ranks = torch.empty_like(sorted_ranks)
+        token_ranks.scatter_(0, order, sorted_ranks)
+
+        if self.cfg.drop_tokens:
+            token_capacity = capacity.gather(0, flat)
+            valid = token_ranks < token_capacity
+        else:
+            valid = torch.ones_like(flat, dtype=torch.bool)
+
+        accepted = torch.bincount(flat[valid], minlength=self.cfg.num_experts)
+        overflow = (raw_load - capacity).clamp_min(0)
+
+        return (
+            valid.reshape_as(expert_indices),
+            accepted,
+            raw_load,
+            overflow,
+            token_ranks.reshape_as(expert_indices),
+        )
 
     def pressure_state_dict(self) -> dict[str, torch.Tensor]:
         return self.pressure.state_dict()

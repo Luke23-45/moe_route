@@ -222,6 +222,11 @@ def main() -> None:
     parser.add_argument("--rebuild-data", action="store_true")
     parser.add_argument("--smoke", action="store_true", help="Run in CPU smoke mode")
     parser.add_argument(
+        "--fast",
+        action="store_true",
+        help="Use the lower-cost TinyStories trainer profile for quick matched comparisons.",
+    )
+    parser.add_argument(
         "--set",
         action="append",
         default=[],
@@ -236,7 +241,7 @@ def main() -> None:
 
     # ── Build common overrides ──
     data_config = "tinystories_smoke" if args.smoke else "tinystories"
-    trainer_config = "smoke" if args.smoke else "tinystories"
+    trainer_config = "smoke" if args.smoke else ("tinystories_fast" if args.fast else "tinystories")
     common_overrides = [f"data={data_config}", f"trainer={trainer_config}", *args.set]
     if args.epochs is not None:
         common_overrides.append(f"trainer.max_epochs={args.epochs}")

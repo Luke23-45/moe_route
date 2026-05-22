@@ -6,18 +6,14 @@ from moe_route.routing.capacity import CapacityPolicy
 from moe_route.routing.routers import RouterConfig, build_router
 
 
-def test_capacity_prefers_high_priority_assignments() -> None:
+def test_standard_capacity_uses_token_order_positions() -> None:
     policy = CapacityPolicy(num_experts=1, top_k=1, capacity_factor=0.5)
     indices = torch.zeros(4, 1, dtype=torch.long)
-    priorities = torch.tensor([[0.1], [0.9], [0.2], [0.8]])
 
-    dispatch_mask, load, raw_load, overflow, token_ranks = policy.enforce(
-        indices,
-        priorities=priorities,
-    )
+    dispatch_mask, load, raw_load, overflow, token_ranks = policy.enforce(indices)
 
-    assert dispatch_mask.squeeze(-1).tolist() == [False, True, False, True]
-    assert token_ranks.squeeze(-1).tolist() == [3, 0, 2, 1]
+    assert dispatch_mask.squeeze(-1).tolist() == [True, True, False, False]
+    assert token_ranks.squeeze(-1).tolist() == [0, 1, 2, 3]
     assert load.tolist() == [2]
     assert raw_load.tolist() == [4]
     assert overflow.tolist() == [2]

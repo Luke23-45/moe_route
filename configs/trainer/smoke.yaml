@@ -7,6 +7,7 @@ clip_grad_norm: 1.0
 compile: false
 compile_mode: null
 log_every: 1
+routing_metrics_every: 1
 eval_every: 0
 checkpoint_every: 5
 save_dir: artifacts/checkpoints
