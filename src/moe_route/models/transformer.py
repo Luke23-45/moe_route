@@ -167,6 +167,9 @@ class DecoderOnlyLM(nn.Module):
             elif isinstance(block.ff, MoEFeedForward):
                 nn.init.normal_(block.ff.experts.w2, mean=0.0, std=residual_std)
                 nn.init.zeros_(block.ff.experts.b2)
+                if block.ff.shared_experts is not None:
+                    nn.init.normal_(block.ff.shared_experts.w2, mean=0.0, std=residual_std)
+                    nn.init.zeros_(block.ff.shared_experts.b2)
 
     def forward(
         self, input_ids: torch.Tensor, labels: torch.Tensor | None = None
@@ -222,11 +225,13 @@ def build_model_cfg(cfg) -> ModelConfig:
         pressure_lr=float(cfg.router.get("pressure_lr", 0.05)),
         pressure_beta=float(cfg.router.get("pressure_beta", 1.0)),
         pressure_decay=float(cfg.router.get("pressure_decay", 0.0)),
+        pressure_warmup_steps=int(cfg.router.get("pressure_warmup_steps", 1000)),
         # Reflected controller (v2) specific fields
         temperature=float(cfg.router.get("temperature", 1.0)),
         pressure_scale=float(cfg.router.get("pressure_scale", 1.0)),
         pressure_eps=float(cfg.router.get("pressure_eps", 1e-8)),
         learnable_bias=bool(cfg.router.get("learnable_bias", True)),
+        shared_experts=int(cfg.router.get("shared_experts", 0)),
         routing_mode=str(cfg.router.get("routing_mode", "dense")),
         gate_function=str(cfg.router.get("gate_function", "softmax")),
     )

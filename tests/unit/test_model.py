@@ -51,6 +51,8 @@ def test_build_model_cfg_preserves_router_routing_mode() -> None:
             "router": {
                 "kind": "reflected_v2",
                 "routing_mode": "sparse",
+                "shared_experts": 1,
+                "pressure_warmup_steps": 128,
                 "top_k": 2,
                 "capacity_factor": 1.25,
                 "drop_tokens": True,
@@ -59,3 +61,5 @@ def test_build_model_cfg_preserves_router_routing_mode() -> None:
     )
     model_cfg = build_model_cfg(cfg)
     assert model_cfg.router.routing_mode == "sparse"
+    assert model_cfg.router.shared_experts == 1
+    assert model_cfg.router.pressure_warmup_steps == 128

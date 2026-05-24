@@ -24,11 +24,13 @@ class RouterConfig:
     pressure_lr: float = 0.05
     pressure_beta: float = 1.0
     pressure_decay: float = 0.0
+    pressure_warmup_steps: int = 1000
     # Reflected controller (v2) specific fields
     temperature: float = 1.0
     pressure_scale: float = 1.0
     pressure_eps: float = 1e-8
     learnable_bias: bool = True
+    shared_experts: int = 0
     # Explicit routing mode selection
     routing_mode: str = "dense"
     gate_function: str = "softmax"  # "softmax" | "sigmoid"
@@ -130,8 +132,10 @@ def build_router(cfg: RouterConfig) -> Router:
                 pressure_beta=cfg.pressure_beta,
                 pressure_eps=cfg.pressure_eps,
                 pressure_decay=cfg.pressure_decay,
+                pressure_warmup_steps=cfg.pressure_warmup_steps,
                 learnable_bias=cfg.learnable_bias,
                 z_loss_weight=cfg.z_loss_weight,
+                shared_experts=cfg.shared_experts,
                 # Mode selection and capacity bounds mapping
                 routing_mode=routing_mode,
                 top_k=cfg.top_k if cfg.top_k > 0 else None,

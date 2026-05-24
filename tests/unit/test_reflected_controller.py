@@ -118,6 +118,25 @@ def test_pressure_projected_ascent() -> None:
     assert router.pressure.q[1] == 0.0, "underloaded expert pressure should be clamped to 0"
 
 
+def test_pressure_lr_is_scaled_by_model_width() -> None:
+    cfg = ReflectedControllerConfig(d_model=16, num_experts=2, pressure_lr=0.8)
+    router = ReflectedController(cfg)
+    assert router.pressure.base_lr == pytest.approx(0.2)
+    assert router.pressure.current_lr() == pytest.approx(0.2)
+
+
+def test_pressure_phase_schedule_decays_after_warmup() -> None:
+    cfg = ReflectedControllerConfig(
+        d_model=4,
+        num_experts=2,
+        pressure_lr=0.8,
+        pressure_warmup_steps=4,
+    )
+    router = ReflectedController(cfg)
+    router.pressure.step.fill_(16)
+    assert router.pressure.current_lr() == pytest.approx(0.2)
+
+
 def test_pressure_update_uses_soft_mass() -> None:
     """Pressure is updated from soft routing probabilities Σ_t p_{t,e}, not hard counts."""
     cfg = ReflectedControllerConfig(d_model=4, num_experts=2, pressure_lr=0.5)
@@ -262,6 +281,29 @@ def test_sparse_shapes() -> None:
     assert result.dispatch_mask.shape == (6, 2), "mask should be [T, K]"
     assert result.diagnostics.dropped_assignments >= 0.0, "diagnostics.dropped_assignments should be computed"
     assert result.diagnostics.entropy > 0.0, "entropy should be non-zero"
+
+
+def test_sparse_feedback_uses_continuous_accepted_mass() -> None:
+    router = _make_controller(routing_mode="sparse", top_k=2, capacity_factor=0.5)
+    router.eval()
+    with torch.no_grad():
+        router.gate.weight.zero_()
+        router.bias[:] = torch.tensor([2.0, 1.0, -3.0, -4.0])
+
+    result = router(torch.randn(4, 8))
+    load = result.diagnostics.load
+    assert load.dtype.is_floating_point
+    assert load.sum().item() == pytest.approx(1.0, abs=1e-4)
+    assert (load - load.round()).abs().max() > 0.01
+    assert torch.allclose(result.diagnostics.extra["feedback_weights"], result.combine_weights)
+
+
+def test_sparse_feedback_is_drop_aware() -> None:
+    router = _make_controller(num_experts=1, routing_mode="sparse", top_k=1, capacity_factor=0.5)
+    router.eval()
+    result = router(torch.randn(4, 8))
+    assert result.diagnostics.load.sum().item() == pytest.approx(2.0, abs=1e-4)
+    assert result.diagnostics.raw_load.sum().item() == pytest.approx(4.0, abs=1e-4)
 
 
 def test_sparse_reflected_capacity_prefers_high_priority_assignments() -> None:

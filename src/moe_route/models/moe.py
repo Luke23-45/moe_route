@@ -55,6 +55,12 @@ class BatchedExpertMLP(nn.Module):
         h = self.dropout(h)
         return torch.bmm(h, self.w2) + self.b2
 
+    def forward_shared_sum(self, x: torch.Tensor) -> torch.Tensor:
+        """Apply all experts to all tokens and sum expert outputs."""
+        num_experts = self.w1.shape[0]
+        expanded = x.unsqueeze(0).expand(num_experts, -1, -1)
+        return self.forward(expanded).sum(dim=0)
+
     def forward_dense_fused(self, x: torch.Tensor, weights: torch.Tensor) -> torch.Tensor:
         """SOTA Fused Grouped GEMM for Dense Soft Routing.
         
@@ -106,6 +112,17 @@ class MoEFeedForward(nn.Module):
         super().__init__()
         self.router: Router = build_router(router_cfg)
         self.experts = BatchedExpertMLP(num_experts, d_model, expert_hidden_size, dropout)
+        self.shared_expert_count = 0
+        self.shared_experts: BatchedExpertMLP | None = None
+        if isinstance(self.router, ReflectedController):
+            self.shared_expert_count = max(int(getattr(self.router.cfg, "shared_experts", 0)), 0)
+            if self.shared_expert_count > 0:
+                self.shared_experts = BatchedExpertMLP(
+                    self.shared_expert_count,
+                    d_model,
+                    expert_hidden_size,
+                    dropout,
+                )
         self.last_diagnostics: RoutingDiagnostics | None = None
         self.num_experts = num_experts
 
@@ -126,6 +143,7 @@ class MoEFeedForward(nn.Module):
 
         # Use SOTA fused Grouped GEMM to avoid [E, T, D] memory allocation
         output = self.experts.forward_dense_fused(flat, route.combine_weights)  # [T, D]
+        output = output + self._shared_output(flat)
 
         self.last_diagnostics = route.diagnostics
         return output.reshape(original_shape), route.diagnostics.aux_loss
@@ -173,9 +191,15 @@ class MoEFeedForward(nn.Module):
             output = output.squeeze(1)
         else:
             output = output.sum(dim=1)
+        output = output + self._shared_output(flat)
 
         self.last_diagnostics = route.diagnostics
         return output.reshape(original_shape), route.diagnostics.aux_loss
+
+    def _shared_output(self, flat: torch.Tensor) -> torch.Tensor:
+        if self.shared_experts is None:
+            return torch.zeros_like(flat)
+        return self.shared_experts.forward_shared_sum(flat)
 
     def pressure_state_dict(self) -> list[dict[str, torch.Tensor] | None]:
         return [self.router.pressure_state_dict()]
