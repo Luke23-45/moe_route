@@ -69,10 +69,10 @@ class DeepSeekLFBRouter(Router):
 
     def forward(self, x: torch.Tensor) -> RoutingResult:
         logits = self.scores(x)
+        full_probs = self._full_gate_probs(logits)
         selection_scores = self._selection_scores(logits)
         _, indices = torch.topk(selection_scores, k=self.cfg.top_k, dim=-1)
-        raw_selected_logits = logits.gather(dim=-1, index=indices)
-        weights = self._combine_weights(raw_selected_logits)
+        weights = self._combine_weights(logits, full_probs, indices)
 
         dispatch_mask, load, raw_load, overflow, token_ranks = self.capacity.enforce(indices)
         weights = weights * dispatch_mask.to(weights.dtype)
@@ -85,7 +85,6 @@ class DeepSeekLFBRouter(Router):
 
         raw_load_fraction = raw_load.float() / raw_load.sum().clamp_min(1)
         load_fraction = load.float() / load.sum().clamp_min(1)
-        full_probs = self._full_gate_probs(logits)
         z_loss = torch.zeros((), device=x.device)
         if self.cfg.z_loss_weight > 0:
             z_loss = self.cfg.z_loss_weight * (torch.logsumexp(logits, dim=-1) ** 2).mean()
@@ -121,10 +120,16 @@ class DeepSeekLFBRouter(Router):
             return torch.sigmoid(biased_logits)
         return biased_logits
 
-    def _combine_weights(self, selected_logits: torch.Tensor) -> torch.Tensor:
+    def _combine_weights(
+        self,
+        logits: torch.Tensor,
+        full_probs: torch.Tensor,
+        indices: torch.Tensor,
+    ) -> torch.Tensor:
         if self.cfg.gate_function == "sigmoid":
-            values = torch.sigmoid(selected_logits)
+            values = full_probs.gather(dim=-1, index=indices)
             return values / values.sum(dim=-1, keepdim=True).clamp_min(1e-8)
+        selected_logits = logits.gather(dim=-1, index=indices)
         return torch.softmax(selected_logits, dim=-1)
 
     def _full_gate_probs(self, logits: torch.Tensor) -> torch.Tensor:
