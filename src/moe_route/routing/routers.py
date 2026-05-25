@@ -34,6 +34,8 @@ class RouterConfig:
     # Explicit routing mode selection
     routing_mode: str = "dense"
     gate_function: str = "softmax"  # "softmax" | "sigmoid"
+    # DeepSeek Loss-Free Balancing specific fields
+    bias_update_rate: float = 1e-3
 
 
 class Router(nn.Module, ABC):
@@ -46,6 +48,10 @@ class Router(nn.Module, ABC):
 
     def load_pressure_state_dict(self, state: dict[str, torch.Tensor] | None) -> None:
         _ = state
+        return None
+
+    def post_optimizer_step(self, *, distributed: bool = False) -> None:
+        _ = distributed
         return None
 
 
@@ -141,6 +147,21 @@ def build_router(cfg: RouterConfig) -> Router:
                 top_k=cfg.top_k if cfg.top_k > 0 else None,
                 capacity_factor=cfg.capacity_factor,
                 drop_tokens=cfg.drop_tokens,
+                gate_function=cfg.gate_function,
+            )
+        )
+    if cfg.kind == "deepseek_lfb":
+        from moe_route.routing.deepseek_lfb import DeepSeekLFBRouter, DeepSeekLFBRouterConfig
+
+        return DeepSeekLFBRouter(
+            DeepSeekLFBRouterConfig(
+                d_model=cfg.d_model,
+                num_experts=cfg.num_experts,
+                top_k=cfg.top_k,
+                capacity_factor=cfg.capacity_factor,
+                drop_tokens=cfg.drop_tokens,
+                z_loss_weight=cfg.z_loss_weight,
+                bias_update_rate=cfg.bias_update_rate,
                 gate_function=cfg.gate_function,
             )
         )

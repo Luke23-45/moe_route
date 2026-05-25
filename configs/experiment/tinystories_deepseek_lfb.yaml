@@ -1,0 +1,5 @@
+name: tinystories_deepseek_lfb
+description: TinyStories DeepSeek Loss-Free Balancing baseline.
+tags:
+  stage: tinystories
+  router: deepseek_lfb

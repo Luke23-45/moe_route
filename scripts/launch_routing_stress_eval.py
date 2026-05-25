@@ -25,6 +25,7 @@ SUITE: tuple[StressSpec, ...] = (
     StressSpec(name="dense", description="Dense baseline"),
     StressSpec(name="top1", description="Top-1 sparse routing baseline"),
     StressSpec(name="top2", description="Top-2 sparse routing baseline"),
+    StressSpec(name="deepseek_lfb", description="DeepSeek Loss-Free Balancing baseline"),
     StressSpec(name="reflected", description="Dense reflected controller"),
     StressSpec(name="reflected_sparse", description="Sparse reflected controller"),
 )

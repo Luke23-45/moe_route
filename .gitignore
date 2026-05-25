@@ -9,7 +9,7 @@ outputs/
 multirun/
 # artifacts/
 mlruns/
-artifacts
+# 
 *.pt
 *.pth
 *.ckpt
@@ -31,3 +31,4 @@ scratch/inspect_config.py
 docs/dev/b3.md
 docs/implemention
 scratch/analysis_output.txt
+artifacts

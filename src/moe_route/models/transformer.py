@@ -211,6 +211,11 @@ class DecoderOnlyLM(nn.Module):
         for module, state in zip(moe_layers, states, strict=True):
             module.load_pressure_state_dict(state)
 
+    def post_optimizer_step(self, *, distributed: bool = False) -> None:
+        for module in self.modules():
+            if isinstance(module, MoEFeedForward):
+                module.post_optimizer_step(distributed=distributed)
+
 
 def build_model_cfg(cfg) -> ModelConfig:
     router_cfg = RouterConfig(
@@ -234,6 +239,7 @@ def build_model_cfg(cfg) -> ModelConfig:
         shared_experts=int(cfg.router.get("shared_experts", 0)),
         routing_mode=str(cfg.router.get("routing_mode", "dense")),
         gate_function=str(cfg.router.get("gate_function", "softmax")),
+        bias_update_rate=float(cfg.router.get("bias_update_rate", 1e-3)),
     )
     return ModelConfig(
         vocab_size=int(cfg.model.vocab_size),

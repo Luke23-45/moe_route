@@ -1,6 +1,7 @@
 """Robust TinyStories experiment suite launcher.
 
-Prepares data once, then runs a validated set of experiments (dense, top1, top2, reflected).
+Prepares data once, then runs a validated set of experiments (dense, top1, top2,
+DeepSeek-LFB, reflected).
 Each experiment is defined as a self-documenting ExperimentSpec with pre-flight validation
 that catches config mismatches, missing files, and compatibility errors before any training.
 """
@@ -73,6 +74,15 @@ SUITE: tuple[ExperimentSpec, ...] = (
         is_moe=True,
         dispatch_mode="sparse",
         description="Top-2 sparse MoE routing",
+    ),
+    ExperimentSpec(
+        name="deepseek_lfb",
+        experiment="tinystories_deepseek_lfb",
+        model="tiny_moe",
+        router="deepseek_lfb",
+        is_moe=True,
+        dispatch_mode="sparse",
+        description="DeepSeek Loss-Free Balancing (top-2, aux-loss-free)",
     ),
     ExperimentSpec(
         name="reflected",
@@ -199,7 +209,7 @@ def build_overrides(
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Prepare TinyStories once and run the full dense/top1/top2/reflected suite.",
+        description="Prepare TinyStories once and run the full dense/top1/top2/DeepSeek-LFB/reflected suite.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=_build_epilog(),
     )

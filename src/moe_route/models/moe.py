@@ -161,6 +161,8 @@ class MoEFeedForward(nn.Module):
         token_ranks = route.token_ranks.view(-1)
 
         cap = self.router.capacity.capacity_per_expert(num_tokens)
+        if not self.router.capacity.drop_tokens:
+            cap = max(cap, int(token_ranks.max().item()) + 1 if token_ranks.numel() > 0 else 1)
         flat_dim = flat.shape[-1]
 
         active_positions = flat_mask.nonzero(as_tuple=False).squeeze(1)
@@ -207,4 +209,7 @@ class MoEFeedForward(nn.Module):
     def load_pressure_state_dict(self, states: list[dict[str, torch.Tensor] | None]) -> None:
         if states:
             self.router.load_pressure_state_dict(states[0])
+
+    def post_optimizer_step(self, *, distributed: bool = False) -> None:
+        self.router.post_optimizer_step(distributed=distributed)
 

@@ -17,7 +17,7 @@ from moe_route.tokenization.tokenizers import build_tokenizer
 from moe_route.evaluation.tasks import evaluate_tasks
 from moe_route.analysis.routing import summarize_routing_run
 
-SUITE = ["dense", "top1", "top2", "reflected", "reflected_sparse"]
+SUITE = ["dense", "top1", "top2", "deepseek_lfb", "reflected", "reflected_sparse"]
 
 def get_step(p: Path) -> int:
     try:

@@ -20,6 +20,13 @@ from moe_route.utils.progress import training_bar
 from moe_route.utils.seed import seed_everything
 
 
+def _post_optimizer_step(model: torch.nn.Module, *, distributed: bool) -> None:
+    raw = model.module if hasattr(model, "module") else model
+    raw = getattr(raw, "_orig_mod", raw)
+    if hasattr(raw, "post_optimizer_step"):
+        raw.post_optimizer_step(distributed=distributed)
+
+
 def _routing_metrics(
     model: torch.nn.Module,
     input_ids: torch.Tensor | None = None,
@@ -309,6 +316,7 @@ def train(cfg) -> Path | None:
                         )
                     scaler.step(optimizer)
                     scaler.update()
+                    _post_optimizer_step(model, distributed=ctx.enabled)
                     scheduler.step()
 
                     should_log = step % log_every == 0 or step == start_step + 1

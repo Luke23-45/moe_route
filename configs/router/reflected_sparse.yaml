@@ -12,5 +12,7 @@ z_loss_weight: 0.0
 aux_loss_weight: 0.0
 # Mode B parameters
 top_k: 2
+# Small 32-expert experiments start highly imbalanced; keep capacity high enough
+# that reflected-sparse is compared on routing behavior rather than overflow drops.
 capacity_factor: 0.5
 drop_tokens: true

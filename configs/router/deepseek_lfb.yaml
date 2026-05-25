@@ -1,0 +1,9 @@
+name: deepseek_lfb
+kind: deepseek_lfb
+top_k: 2
+capacity_factor: 0.5
+drop_tokens: false
+aux_loss_weight: 0.0
+z_loss_weight: 0.0
+bias_update_rate: 0.001
+gate_function: sigmoid

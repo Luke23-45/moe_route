@@ -15,6 +15,7 @@ def test_runner_discovers_config_choices() -> None:
     assert "tinystories_smoke" in module.config_choices("data")
     assert "tinystories" in module.config_choices("data")
     assert "tinystories" in module.config_choices("trainer")
+    assert "deepseek_lfb" in module.config_choices("router")
     assert "reflected_top2" not in module.config_choices("router")
 
 
