@@ -55,6 +55,12 @@ class BatchedExpertMLP(nn.Module):
         h = self.dropout(h)
         return torch.bmm(h, self.w2) + self.b2
 
+    def forward_expert(self, expert_idx: int, x: torch.Tensor) -> torch.Tensor:
+        h = x @ self.w1[expert_idx] + self.b1[expert_idx]
+        h = torch.nn.functional.gelu(h)
+        h = self.dropout(h)
+        return h @ self.w2[expert_idx] + self.b2[expert_idx]
+
     def forward_shared_sum(self, x: torch.Tensor) -> torch.Tensor:
         """Apply all experts to all tokens and sum expert outputs."""
         num_experts = self.w1.shape[0]
@@ -160,9 +166,17 @@ class MoEFeedForward(nn.Module):
         flat_mask = route.dispatch_mask.view(-1)
         token_ranks = route.token_ranks.view(-1)
 
-        cap = self.router.capacity.capacity_per_expert(num_tokens)
         if not self.router.capacity.drop_tokens:
-            cap = max(cap, int(token_ranks.max().item()) + 1 if token_ranks.numel() > 0 else 1)
+            return self._forward_sparse_dropless(
+                original_shape=original_shape,
+                flat=flat,
+                route=route,
+                flat_indices=flat_indices,
+                flat_mask=flat_mask,
+                top_k=top_k,
+            )
+
+        cap = self.router.capacity.capacity_per_expert(num_tokens)
         flat_dim = flat.shape[-1]
 
         active_positions = flat_mask.nonzero(as_tuple=False).squeeze(1)
@@ -186,6 +200,53 @@ class MoEFeedForward(nn.Module):
             buffer_out = self.experts(buffer)
             expert_out = buffer_out.view(self.num_experts * cap, flat_dim).index_select(0, active_buffer_idx)
             active_outputs.index_copy_(0, active_positions, expert_out)
+
+        weights = route.combine_weights.view(-1)
+        output = (active_outputs * weights.unsqueeze(-1)).view(num_tokens, top_k, flat_dim)
+        if top_k == 1:
+            output = output.squeeze(1)
+        else:
+            output = output.sum(dim=1)
+        output = output + self._shared_output(flat)
+
+        self.last_diagnostics = route.diagnostics
+        return output.reshape(original_shape), route.diagnostics.aux_loss
+
+    def _forward_sparse_dropless(
+        self,
+        *,
+        original_shape: torch.Size,
+        flat: torch.Tensor,
+        route,
+        flat_indices: torch.Tensor,
+        flat_mask: torch.Tensor,
+        top_k: int,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Dropless sparse dispatch without padding every expert to max load.
+
+        DeepSeek-LFB is dropless by default. The padded sparse path allocates
+        [num_experts, max_expert_load, d_model], which can OOM when early
+        routing is imbalanced. Grouped per-expert execution keeps activation
+        memory proportional to the actual routed assignments.
+        """
+        num_tokens = flat.shape[0]
+        flat_dim = flat.shape[-1]
+        active_positions = flat_mask.nonzero(as_tuple=False).squeeze(1)
+        active_outputs = torch.zeros(num_tokens * top_k, flat_dim, dtype=flat.dtype, device=flat.device)
+
+        if active_positions.numel() > 0:
+            active_experts = flat_indices.index_select(0, active_positions)
+            active_tokens = torch.div(active_positions, top_k, rounding_mode="floor")
+
+            for expert_idx in range(self.num_experts):
+                expert_mask = active_experts == expert_idx
+                if not bool(expert_mask.any()):
+                    continue
+                expert_positions = active_positions[expert_mask]
+                expert_tokens = active_tokens[expert_mask]
+                expert_input = flat.index_select(0, expert_tokens)
+                expert_output = self.experts.forward_expert(expert_idx, expert_input)
+                active_outputs.index_copy_(0, expert_positions, expert_output)
 
         weights = route.combine_weights.view(-1)
         output = (active_outputs * weights.unsqueeze(-1)).view(num_tokens, top_k, flat_dim)
