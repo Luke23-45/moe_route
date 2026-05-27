@@ -279,7 +279,19 @@ class ReflectedController(Router):
         # Fast path: use fused Triton kernel if available (drops by arrival order, not priority)
         # SOTA implementations avoid sorting to maximize bandwidth
         if HAS_TRITON and device.type == 'cuda':
-            return enforce_capacity_triton(expert_indices, capacity, self.cfg.drop_tokens)
+            valid_mask, accepted, raw, overflow, ranks = enforce_capacity_triton(
+                expert_indices, capacity, self.cfg.drop_tokens
+            )
+            # enforce_capacity_triton flattens expert_indices internally, so its
+            # outputs are 1-D [T*top_k]. Reshape back to [T, top_k] so that
+            # dispatch_mask and token_ranks broadcast correctly with combine_weights.
+            return (
+                valid_mask.reshape_as(expert_indices),
+                accepted,
+                raw,
+                overflow,
+                ranks.reshape_as(expert_indices),
+            )
 
         raw_load = torch.bincount(flat, minlength=self.cfg.num_experts)
 
