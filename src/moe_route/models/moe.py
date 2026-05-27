@@ -7,6 +7,7 @@ from moe_route.utils.compile_state import conditional_dynamo_disable
 from moe_route.routing.routers import Router, RouterConfig, build_router
 from moe_route.routing.types import RoutingDiagnostics
 from moe_route.routing.reflected_controller import ReflectedController
+from moe_route.routing.kernels import HAS_TRITON, moe_gather_triton, moe_scatter_triton
 
 
 class ExpertMLP(nn.Module):
@@ -193,27 +194,46 @@ class MoEFeedForward(nn.Module):
         cap = self.router.capacity.capacity_per_expert(num_tokens)
         flat_dim = flat.shape[-1]
 
-        active_positions = flat_mask.nonzero(as_tuple=False).squeeze(1)
-        active_outputs = torch.zeros(num_tokens * top_k, flat_dim, dtype=flat.dtype, device=flat.device)
+        # Use sync-free garbage-bin padding: cap + 1 per expert.
+        # Index 'cap' is the garbage bin where dropped tokens overwrite each other safely.
+        safe_ranks = torch.where(flat_mask, token_ranks, torch.tensor(cap, device=flat.device))
+        buffer_idx = flat_indices * (cap + 1) + safe_ranks
+        
+        # Token indices corresponding to each of the num_tokens * top_k routing assignments
+        token_idx = torch.arange(num_tokens, device=flat.device).unsqueeze(1).expand(-1, top_k).reshape(-1)
 
-        if active_positions.numel() > 0:
-            active_experts = flat_indices.index_select(0, active_positions)
-            active_ranks = token_ranks.index_select(0, active_positions)
-            active_tokens = torch.div(active_positions, top_k, rounding_mode="floor")
-            active_buffer_idx = active_experts * cap + active_ranks
-
+        # Scatter all tokens (valid and dropped). Dropped tokens safely land in the garbage bin.
+        if HAS_TRITON and flat.is_cuda:
+            flat_buffer = moe_gather_triton(flat, buffer_idx, token_idx, self.num_experts, cap)
+        else:
             flat_buffer = torch.zeros(
-                self.num_experts * cap,
+                self.num_experts * (cap + 1),
                 flat_dim,
                 dtype=flat.dtype,
                 device=flat.device,
             )
-            flat_buffer.index_copy_(0, active_buffer_idx, flat.index_select(0, active_tokens))
+            flat_buffer.index_copy_(0, buffer_idx, flat.index_select(0, token_idx))
 
-            buffer = flat_buffer.view(self.num_experts, cap, flat_dim)
-            buffer_out = self.experts(buffer)
-            expert_out = buffer_out.view(self.num_experts * cap, flat_dim).index_select(0, active_buffer_idx)
-            active_outputs.index_copy_(0, active_positions, expert_out)
+        # View buffer and run experts ONLY on the valid 'cap' portion (ignoring the garbage bin)
+        buffer = flat_buffer.view(self.num_experts, cap + 1, flat_dim)[:, :cap, :].contiguous()
+        buffer_out = self.experts(buffer)
+
+        # Gather back from an output padded buffer
+        out_padded = torch.zeros(
+            self.num_experts * (cap + 1),
+            flat_dim,
+            dtype=flat.dtype,
+            device=flat.device,
+        )
+        out_padded.view(self.num_experts, cap + 1, flat_dim)[:, :cap, :] = buffer_out
+
+        # Gather results for all assignments
+        if HAS_TRITON and flat.is_cuda:
+            active_outputs = moe_scatter_triton(out_padded, buffer_idx, flat_mask)
+        else:
+            active_outputs = out_padded.index_select(0, buffer_idx)
+            # Zero out the outputs that came from the garbage bin (dropped tokens)
+            active_outputs = active_outputs * flat_mask.unsqueeze(-1).to(active_outputs.dtype)
 
         weights = route.combine_weights.view(-1)
         output = (active_outputs * weights.unsqueeze(-1)).view(num_tokens, top_k, flat_dim)

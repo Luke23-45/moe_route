@@ -5,9 +5,11 @@ import torch
 import time
 from moe_route.routing.routers import RouterConfig, build_router
 
-def profile_router(kind: str, seq_len: int = 4096, batch_size: int = 8, d_model: int = 4096, num_experts: int = 64, top_k: int = 2):
+from moe_route.models.moe import MoEFeedForward
+
+def profile_router(kind: str, seq_len: int = 1024, batch_size: int = 2, d_model: int = 512, num_experts: int = 8, top_k: int = 2):
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    print(f"\n--- Profiling {kind} router on {device} ---")
+    print(f"\n--- Profiling {kind} MoE layer on {device} ---")
     
     cfg = RouterConfig(
         kind=kind,
@@ -18,16 +20,16 @@ def profile_router(kind: str, seq_len: int = 4096, batch_size: int = 8, d_model:
         routing_mode="sparse" if kind == "reflected_v2" else "dense"
     )
     
-    router = build_router(cfg).to(device)
+    layer = MoEFeedForward(d_model=d_model, num_experts=num_experts, expert_hidden_size=d_model * 2, dropout=0.0, router_cfg=cfg).to(device)
     
     # Dummy input
     x = torch.randn(batch_size * seq_len, d_model, device=device, requires_grad=True)
     
     # Warmup
-    for _ in range(5):
-        res = router(x)
-        if hasattr(router, "post_optimizer_step"):
-            router.post_optimizer_step()
+    for _ in range(3):
+        out, loss = layer(x)
+        if hasattr(layer, "post_optimizer_step"):
+            layer.post_optimizer_step()
     
     if torch.cuda.is_available():
         torch.cuda.synchronize()
@@ -35,12 +37,11 @@ def profile_router(kind: str, seq_len: int = 4096, batch_size: int = 8, d_model:
     start_time = time.perf_counter()
     num_iters = 50
     for _ in range(num_iters):
-        res = router(x)
-        loss = res.diagnostics.aux_loss
+        out, loss = layer(x)
         if loss is not None and loss.requires_grad:
             loss.backward()
-        if hasattr(router, "post_optimizer_step"):
-            router.post_optimizer_step()
+        if hasattr(layer, "post_optimizer_step"):
+            layer.post_optimizer_step()
             
     if torch.cuda.is_available():
         torch.cuda.synchronize()

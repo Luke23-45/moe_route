@@ -110,3 +110,100 @@ def enforce_capacity_triton(expert_indices: torch.Tensor, capacity: torch.Tensor
         overflow_counts, 
         token_ranks.reshape_as(expert_indices)
     )
+
+if HAS_TRITON:
+    @triton.jit
+    def triton_moe_gather_kernel(
+        x_ptr,
+        flat_buffer_ptr,
+        buffer_idx_ptr,
+        token_idx_ptr,
+        num_assignments,
+        flat_dim: tl.constexpr,
+        BLOCK_SIZE: tl.constexpr,
+    ):
+        pid_m = tl.program_id(0)
+        pid_d = tl.program_id(1)
+        
+        m_offset = pid_m * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+        d_offset = pid_d
+        
+        mask = m_offset < num_assignments
+        
+        # Load the destination index in the padded buffer and the source token index
+        buf_idx = tl.load(buffer_idx_ptr + m_offset, mask=mask, other=0)
+        tok_idx = tl.load(token_idx_ptr + m_offset, mask=mask, other=0)
+        
+        # Calculate pointers
+        src_ptrs = x_ptr + tok_idx * flat_dim + d_offset
+        dst_ptrs = flat_buffer_ptr + buf_idx * flat_dim + d_offset
+        
+        # Load and store
+        val = tl.load(src_ptrs, mask=mask, other=0.0)
+        tl.store(dst_ptrs, val, mask=mask)
+
+    @triton.jit
+    def triton_moe_scatter_kernel(
+        out_padded_ptr,
+        active_outputs_ptr,
+        buffer_idx_ptr,
+        flat_mask_ptr,
+        num_assignments,
+        flat_dim: tl.constexpr,
+        BLOCK_SIZE: tl.constexpr,
+    ):
+        pid_m = tl.program_id(0)
+        pid_d = tl.program_id(1)
+        
+        m_offset = pid_m * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+        d_offset = pid_d
+        
+        mask = m_offset < num_assignments
+        
+        # Load buffer index and valid mask
+        buf_idx = tl.load(buffer_idx_ptr + m_offset, mask=mask, other=0)
+        is_valid = tl.load(flat_mask_ptr + m_offset, mask=mask, other=0)
+        
+        src_ptrs = out_padded_ptr + buf_idx * flat_dim + d_offset
+        dst_ptrs = active_outputs_ptr + m_offset * flat_dim + d_offset
+        
+        # Load from padded expert outputs
+        val = tl.load(src_ptrs, mask=mask, other=0.0)
+        # Zero out dropped tokens
+        val = val * is_valid
+        
+        tl.store(dst_ptrs, val, mask=mask)
+
+def moe_gather_triton(x: torch.Tensor, buffer_idx: torch.Tensor, token_idx: torch.Tensor, num_experts: int, cap: int):
+    flat_dim = x.shape[-1]
+    num_assignments = buffer_idx.shape[0]
+    
+    flat_buffer = torch.zeros(
+        num_experts * (cap + 1), flat_dim, dtype=x.dtype, device=x.device
+    )
+    
+    BLOCK_SIZE = 128
+    grid = (triton.cdiv(num_assignments, BLOCK_SIZE), flat_dim)
+    
+    triton_moe_gather_kernel[grid](
+        x, flat_buffer, buffer_idx, token_idx, num_assignments,
+        flat_dim=flat_dim, BLOCK_SIZE=BLOCK_SIZE
+    )
+    return flat_buffer
+
+def moe_scatter_triton(out_padded: torch.Tensor, buffer_idx: torch.Tensor, flat_mask: torch.Tensor):
+    flat_dim = out_padded.shape[-1]
+    num_assignments = buffer_idx.shape[0]
+    
+    active_outputs = torch.empty(
+        num_assignments, flat_dim, dtype=out_padded.dtype, device=out_padded.device
+    )
+    
+    BLOCK_SIZE = 128
+    grid = (triton.cdiv(num_assignments, BLOCK_SIZE), flat_dim)
+    
+    triton_moe_scatter_kernel[grid](
+        out_padded, active_outputs, buffer_idx, flat_mask.to(torch.int32), num_assignments,
+        flat_dim=flat_dim, BLOCK_SIZE=BLOCK_SIZE
+    )
+    return active_outputs
