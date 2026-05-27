@@ -1,0 +1,5 @@
+name: fineweb_deepseek_lfb
+description: FineWeb DeepSeek Loss-Free Balancing baseline for main-scale comparison.
+tags:
+  stage: main
+  router: deepseek_lfb

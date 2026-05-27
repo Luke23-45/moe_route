@@ -7,7 +7,7 @@ pressure_lr: 0.05
 pressure_decay: 0.0
 pressure_warmup_steps: 1000
 learnable_bias: true
-shared_experts: 0
+shared_experts: 1
 z_loss_weight: 0.0
 aux_loss_weight: 0.0
 # Structurally ignored in dense mode, kept for backwards compatibility
