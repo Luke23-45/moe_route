@@ -118,11 +118,9 @@ class MoEFeedForward(nn.Module):
         super().__init__()
         self.router: Router = build_router(router_cfg)
         self.experts = BatchedExpertMLP(num_experts, d_model, expert_hidden_size, dropout)
-        self.shared_expert_count = 0
         self.shared_experts: BatchedExpertMLP | None = None
-        if isinstance(self.router, ReflectedController):
-            self.shared_expert_count = max(int(getattr(self.router.cfg, "shared_experts", 0)), 0)
-            if self.shared_expert_count > 0:
+        self.shared_expert_count = max(int(getattr(self.router.cfg, "shared_experts", 0)), 0)
+        if self.shared_expert_count > 0:
                 self.shared_experts = BatchedExpertMLP(
                     self.shared_expert_count,
                     d_model,

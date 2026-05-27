@@ -29,6 +29,7 @@ class DeepSeekLFBRouterConfig:
     z_loss_weight: float = 0.0
     bias_update_rate: float = 1e-3
     gate_function: str = "softmax"  # "softmax" | "sigmoid"
+    shared_experts: int = 0
 
 
 class DeepSeekLFBRouter(Router):

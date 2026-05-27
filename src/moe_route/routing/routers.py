@@ -163,6 +163,7 @@ def build_router(cfg: RouterConfig) -> Router:
                 z_loss_weight=cfg.z_loss_weight,
                 bias_update_rate=cfg.bias_update_rate,
                 gate_function=cfg.gate_function,
+                shared_experts=cfg.shared_experts,
             )
         )
     raise ValueError(f"Unknown router kind: {cfg.kind}")
