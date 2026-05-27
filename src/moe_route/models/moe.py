@@ -64,23 +64,18 @@ class BatchedExpertMLP(nn.Module):
 
     def forward_shared_sum(self, x: torch.Tensor) -> torch.Tensor:
         """Apply all experts to all tokens and sum expert outputs.
-        
-        Optimized by reshaping weights into a single wide linear layer to
-        avoid [E, T, D] expansion, using a single GEMM for all shared experts.
+
+        This is the correct dense reference path for shared experts.
+        It computes each expert independently and sums the outputs.
         """
-        E, D, H = self.w1.shape
-        w1_wide = self.w1.transpose(0, 1).reshape(D, E * H)
-        b1_wide = self.b1.view(E * H)
-        
-        h = torch.matmul(x, w1_wide) + b1_wide
+        # x: [T, D] -> [E, T, H]
+        h = torch.bmm(x.unsqueeze(0).expand(self.w1.shape[0], -1, -1), self.w1)
+        h = h + self.b1
         h = torch.nn.functional.gelu(h)
         h = self.dropout(h)
-        
-        w2_wide = self.w2.reshape(E * H, D)
-        out = torch.matmul(h, w2_wide)
-        
-        b2_sum = self.b2.sum(dim=0).squeeze(0)
-        return out + b2_sum
+
+        out = torch.bmm(h, self.w2).sum(dim=0)  # [T, D]
+        return out + self.b2.sum(dim=0)
 
     def forward_dense_fused(self, x: torch.Tensor, weights: torch.Tensor) -> torch.Tensor:
         """SOTA Fused Grouped GEMM for Dense Soft Routing.
@@ -205,11 +200,15 @@ class MoEFeedForward(nn.Module):
         token_idx = torch.arange(num_tokens, device=flat.device).unsqueeze(1).expand(-1, top_k).reshape(-1)
 
         # ── Scatter tokens into expert buffer ──────────────────────────
-        flat_buffer = torch.zeros(
-            self.num_experts * (cap + 1), flat_dim,
-            dtype=flat.dtype, device=flat.device,
-        )
-        flat_buffer.index_copy_(0, buffer_idx, flat.index_select(0, token_idx))
+        if HAS_TRITON and flat.is_cuda:
+            buffer_slots = self.num_experts * (cap + 1)
+            flat_buffer = moe_gather_triton(flat, buffer_idx, token_idx, buffer_slots)
+        else:
+            flat_buffer = torch.zeros(
+                self.num_experts * (cap + 1), flat_dim,
+                dtype=flat.dtype, device=flat.device,
+            )
+            flat_buffer.index_copy_(0, buffer_idx, flat.index_select(0, token_idx))
 
         # ── Run expert MLPs on full buffer including garbage bins ──────
         # [E, cap+1, D] — the single garbage row per expert is trivial overhead
@@ -218,9 +217,13 @@ class MoEFeedForward(nn.Module):
 
         # ── Gather results back and mask ───────────────────────────────
         flat_out = buffer_out.view(self.num_experts * (cap + 1), flat_dim)
-        active_outputs = flat_out.index_select(0, buffer_idx)
-        # Zero out garbage-bin outputs for dropped tokens
-        active_outputs = active_outputs * flat_mask.unsqueeze(-1).to(active_outputs.dtype)
+        
+        if HAS_TRITON and flat.is_cuda:
+            active_outputs = moe_scatter_triton(flat_out, buffer_idx, flat_mask)
+        else:
+            active_outputs = flat_out.index_select(0, buffer_idx)
+            # Zero out garbage-bin outputs for dropped tokens
+            active_outputs = active_outputs * flat_mask.unsqueeze(-1).to(active_outputs.dtype)
 
         weights = route.combine_weights.view(-1)
         output = (active_outputs * weights.unsqueeze(-1)).view(num_tokens, top_k, flat_dim)
