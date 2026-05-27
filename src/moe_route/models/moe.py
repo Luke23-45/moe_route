@@ -194,46 +194,33 @@ class MoEFeedForward(nn.Module):
         cap = self.router.capacity.capacity_per_expert(num_tokens)
         flat_dim = flat.shape[-1]
 
-        # Use sync-free garbage-bin padding: cap + 1 per expert.
-        # Index 'cap' is the garbage bin where dropped tokens overwrite each other safely.
-        safe_ranks = torch.where(flat_mask, token_ranks, torch.tensor(cap, device=flat.device))
+        # ── Sync-free garbage-bin dispatch ──────────────────────────────
+        # Dropped tokens get rank = cap, landing in a "garbage bin" row per expert.
+        # This avoids .nonzero() (host-device sync) entirely.
+        # The garbage bin adds only E extra rows of compute — negligible vs. E*cap.
+        safe_ranks = torch.where(flat_mask, token_ranks, cap)
         buffer_idx = flat_indices * (cap + 1) + safe_ranks
-        
-        # Token indices corresponding to each of the num_tokens * top_k routing assignments
+
+        # Token index for each of the T*K routing assignments
         token_idx = torch.arange(num_tokens, device=flat.device).unsqueeze(1).expand(-1, top_k).reshape(-1)
 
-        # Scatter all tokens (valid and dropped). Dropped tokens safely land in the garbage bin.
-        if HAS_TRITON and flat.is_cuda:
-            flat_buffer = moe_gather_triton(flat, buffer_idx, token_idx, self.num_experts, cap)
-        else:
-            flat_buffer = torch.zeros(
-                self.num_experts * (cap + 1),
-                flat_dim,
-                dtype=flat.dtype,
-                device=flat.device,
-            )
-            flat_buffer.index_copy_(0, buffer_idx, flat.index_select(0, token_idx))
+        # ── Scatter tokens into expert buffer ──────────────────────────
+        flat_buffer = torch.zeros(
+            self.num_experts * (cap + 1), flat_dim,
+            dtype=flat.dtype, device=flat.device,
+        )
+        flat_buffer.index_copy_(0, buffer_idx, flat.index_select(0, token_idx))
 
-        # View buffer and run experts ONLY on the valid 'cap' portion (ignoring the garbage bin)
-        buffer = flat_buffer.view(self.num_experts, cap + 1, flat_dim)[:, :cap, :].contiguous()
+        # ── Run expert MLPs on full buffer including garbage bins ──────
+        # [E, cap+1, D] — the single garbage row per expert is trivial overhead
+        buffer = flat_buffer.view(self.num_experts, cap + 1, flat_dim)
         buffer_out = self.experts(buffer)
 
-        # Gather back from an output padded buffer
-        out_padded = torch.zeros(
-            self.num_experts * (cap + 1),
-            flat_dim,
-            dtype=flat.dtype,
-            device=flat.device,
-        )
-        out_padded.view(self.num_experts, cap + 1, flat_dim)[:, :cap, :] = buffer_out
-
-        # Gather results for all assignments
-        if HAS_TRITON and flat.is_cuda:
-            active_outputs = moe_scatter_triton(out_padded, buffer_idx, flat_mask)
-        else:
-            active_outputs = out_padded.index_select(0, buffer_idx)
-            # Zero out the outputs that came from the garbage bin (dropped tokens)
-            active_outputs = active_outputs * flat_mask.unsqueeze(-1).to(active_outputs.dtype)
+        # ── Gather results back and mask ───────────────────────────────
+        flat_out = buffer_out.view(self.num_experts * (cap + 1), flat_dim)
+        active_outputs = flat_out.index_select(0, buffer_idx)
+        # Zero out garbage-bin outputs for dropped tokens
+        active_outputs = active_outputs * flat_mask.unsqueeze(-1).to(active_outputs.dtype)
 
         weights = route.combine_weights.view(-1)
         output = (active_outputs * weights.unsqueeze(-1)).view(num_tokens, top_k, flat_dim)
@@ -304,7 +291,7 @@ class MoEFeedForward(nn.Module):
 
     def _shared_output(self, flat: torch.Tensor) -> torch.Tensor:
         if self.shared_experts is None:
-            return torch.zeros_like(flat)
+            return 0.0
         return self.shared_experts.forward_shared_sum(flat)
 
     def pressure_state_dict(self) -> list[dict[str, torch.Tensor] | None]:
