@@ -34,7 +34,19 @@ class CapacityPolicy:
         capacity = self.capacity(expert_indices.shape[0], device)
 
         if HAS_TRITON and device.type == 'cuda':
-            return enforce_capacity_triton(expert_indices, capacity, self.drop_tokens)
+            valid_mask, accepted, raw_load, overflow, token_ranks = enforce_capacity_triton(
+                expert_indices, capacity, self.drop_tokens
+            )
+            # enforce_capacity_triton reshapes expert_indices to 1-D internally,
+            # so valid_mask and token_ranks come back flat [T*K].
+            # Reshape them to the caller's [T, K] shape to match the CPU path.
+            return (
+                valid_mask.reshape_as(expert_indices),
+                accepted,
+                raw_load,
+                overflow,
+                token_ranks.reshape_as(expert_indices),
+            )
 
         raw_load = torch.bincount(flat, minlength=self.num_experts)
 

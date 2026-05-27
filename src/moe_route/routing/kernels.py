@@ -58,10 +58,14 @@ def enforce_capacity_triton(
     drop_tokens: bool,
 ):
     """
-    expert_indices: flat int tensor of shape [num_assignments]
+    expert_indices: int tensor of shape [T, K] or flat [num_assignments]
     capacity:        int tensor of shape [num_experts]
     returns:
-        valid_mask, accepted_counts, raw_counts, overflow_counts, token_ranks
+        valid_mask       – same shape as expert_indices, bool
+        accepted_counts  – [num_experts]
+        raw_counts       – [num_experts]
+        overflow_counts  – [num_experts]
+        token_ranks      – same shape as expert_indices
     """
     if not HAS_TRITON or not expert_indices.is_cuda:
         raise RuntimeError("Triton kernels require Triton and CUDA tensors.")
@@ -76,6 +80,8 @@ def enforce_capacity_triton(
     else:
         capacity = capacity.to(COUNT_DTYPE)
 
+    # Save original shape so we can restore [T, K] on return.
+    original_shape = expert_indices.shape
     expert_indices = expert_indices.reshape(-1).contiguous()
     capacity = capacity.contiguous()
 
@@ -110,11 +116,11 @@ def enforce_capacity_triton(
     )
 
     return (
-        valid_mask.reshape_as(expert_indices).to(torch.bool),
+        valid_mask.view(original_shape).to(torch.bool),
         accepted_counts,
         raw_counts,
         overflow_counts,
-        token_ranks.reshape_as(expert_indices),
+        token_ranks.view(original_shape),
     )
 
 
