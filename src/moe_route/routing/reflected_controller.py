@@ -11,6 +11,7 @@ from torch import nn
 from moe_route.routing.metrics import routing_entropy
 from moe_route.routing.routers import Router
 from moe_route.routing.types import RoutingDiagnostics, RoutingResult
+from moe_route.routing.kernels import HAS_TRITON, enforce_capacity_triton
 
 
 @dataclass(frozen=True)
@@ -274,12 +275,24 @@ class ReflectedController(Router):
         flat_priorities = priorities.reshape(-1)
         device = flat.device
         capacity = self.capacity.capacity(expert_indices.shape[0], device)
+        
+        # Fast path: use fused Triton kernel if available (drops by arrival order, not priority)
+        # SOTA implementations avoid sorting to maximize bandwidth
+        if HAS_TRITON and device.type == 'cuda':
+            return enforce_capacity_triton(expert_indices, capacity, self.cfg.drop_tokens)
+
         raw_load = torch.bincount(flat, minlength=self.cfg.num_experts)
 
-        priority_order = torch.argsort(-flat_priorities, stable=True)
-        priority_sorted_experts = flat.index_select(0, priority_order)
-        expert_order = torch.argsort(priority_sorted_experts, stable=True)
-        order = priority_order.index_select(0, expert_order)
+        # CPU/Fallback path: Optimized single argsort using a composite key
+        # We want to group by expert ID, and within each expert sort by descending priority.
+        # Since priorities are typically bounded, we can normalize them to [0, 1).
+        p_min = flat_priorities.min()
+        p_max = flat_priorities.max()
+        norm_priority = (flat_priorities - p_min) / (p_max - p_min + 1e-6)
+        
+        # Composite key: expert_id - norm_priority (so higher priority comes first within the same expert)
+        composite_key = flat.float() - norm_priority
+        order = torch.argsort(composite_key, stable=True)
 
         sorted_flat = flat.index_select(0, order)
         positions = torch.arange(sorted_flat.numel(), device=device, dtype=torch.long)

@@ -1,0 +1,20 @@
+name: fineweb
+max_epochs: null
+max_steps: 100000
+grad_accum_steps: 4
+precision: bf16
+clip_grad_norm: 1.0
+compile: true
+compile_mode: reduce-overhead
+log_every: 50
+routing_metrics_every: 500
+eval_every: 0
+checkpoint_every: 10000
+save_dir: artifacts/checkpoints/fineweb
+resume_from: null
+prepare_data: true
+progress:
+  enabled: true
+  dynamic_ncols: true
+  leave: true
+  mininterval: 1.0

@@ -1,0 +1,5 @@
+name: fineweb_top2
+description: FineWeb Top-2 anchor run for main-scale baseline comparison.
+tags:
+  stage: main
+  router: top2

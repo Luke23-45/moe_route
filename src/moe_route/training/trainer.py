@@ -291,7 +291,10 @@ def train(cfg) -> Path | None:
                     optimizer.zero_grad(set_to_none=True)
                     total_loss = torch.zeros((), device=ctx.device)
                     total_aux_loss = torch.zeros((), device=ctx.device)
-                    for _ in range(grad_accum):
+                    import contextlib
+                    for accum_step in range(grad_accum):
+                        is_accumulating = accum_step < grad_accum - 1
+                        sync_context = model.no_sync() if is_accumulating and hasattr(model, "no_sync") else contextlib.nullcontext()
                         try:
                             input_ids, labels = next(data_iter)
                         except StopIteration:
@@ -299,15 +302,16 @@ def train(cfg) -> Path | None:
                             input_ids, labels = next(data_iter)
                         input_ids = input_ids.to(ctx.device, non_blocking=True)
                         labels = labels.to(ctx.device, non_blocking=True)
-                        with torch.autocast(
-                            device_type=ctx.device.type, dtype=amp_dtype, enabled=use_amp
-                        ):
-                            _, loss, parts = model(input_ids, labels)
-                        if loss is None:
-                            raise RuntimeError("Training loss was not produced.")
-                        scaler.scale(loss / grad_accum).backward()
+                        with sync_context:
+                            with torch.autocast(
+                                device_type=ctx.device.type, dtype=amp_dtype, enabled=use_amp
+                            ):
+                                _, loss, parts = model(input_ids, labels)
+                            if loss is None:
+                                raise RuntimeError("Training loss was not produced.")
+                            scaler.scale(loss / grad_accum).backward()
                         total_loss = total_loss + loss.detach() / grad_accum
-                        total_aux_loss = total_aux_loss + parts["aux_loss"] / grad_accum
+                        total_aux_loss = total_aux_loss + parts["aux_loss"].detach() / grad_accum
 
                     if cfg.trainer.clip_grad_norm is not None:
                         scaler.unscale_(optimizer)

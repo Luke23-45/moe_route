@@ -62,10 +62,24 @@ class BatchedExpertMLP(nn.Module):
         return h @ self.w2[expert_idx] + self.b2[expert_idx]
 
     def forward_shared_sum(self, x: torch.Tensor) -> torch.Tensor:
-        """Apply all experts to all tokens and sum expert outputs."""
-        num_experts = self.w1.shape[0]
-        expanded = x.unsqueeze(0).expand(num_experts, -1, -1)
-        return self.forward(expanded).sum(dim=0)
+        """Apply all experts to all tokens and sum expert outputs.
+        
+        Optimized by reshaping weights into a single wide linear layer to
+        avoid [E, T, D] expansion, using a single GEMM for all shared experts.
+        """
+        E, D, H = self.w1.shape
+        w1_wide = self.w1.transpose(0, 1).reshape(D, E * H)
+        b1_wide = self.b1.view(E * H)
+        
+        h = torch.matmul(x, w1_wide) + b1_wide
+        h = torch.nn.functional.gelu(h)
+        h = self.dropout(h)
+        
+        w2_wide = self.w2.reshape(E * H, D)
+        out = torch.matmul(h, w2_wide)
+        
+        b2_sum = self.b2.sum(dim=0).squeeze(0)
+        return out + b2_sum
 
     def forward_dense_fused(self, x: torch.Tensor, weights: torch.Tensor) -> torch.Tensor:
         """SOTA Fused Grouped GEMM for Dense Soft Routing.
@@ -238,15 +252,24 @@ class MoEFeedForward(nn.Module):
             active_experts = flat_indices.index_select(0, active_positions)
             active_tokens = torch.div(active_positions, top_k, rounding_mode="floor")
 
-            for expert_idx in range(self.num_experts):
-                expert_mask = active_experts == expert_idx
-                if not bool(expert_mask.any()):
-                    continue
-                expert_positions = active_positions[expert_mask]
-                expert_tokens = active_tokens[expert_mask]
-                expert_input = flat.index_select(0, expert_tokens)
-                expert_output = self.experts.forward_expert(expert_idx, expert_input)
-                active_outputs.index_copy_(0, expert_positions, expert_output)
+            token_ranks = route.token_ranks.view(-1).index_select(0, active_positions)
+            
+            # Dynamically determine the maximum actual load in this batch to minimize padding
+            actual_cap = token_ranks.max().item() + 1
+            
+            active_buffer_idx = active_experts * actual_cap + token_ranks
+            flat_buffer = torch.zeros(
+                self.num_experts * actual_cap,
+                flat_dim,
+                dtype=flat.dtype,
+                device=flat.device,
+            )
+            flat_buffer.index_copy_(0, active_buffer_idx, flat.index_select(0, active_tokens))
+
+            buffer = flat_buffer.view(self.num_experts, actual_cap, flat_dim)
+            buffer_out = self.experts(buffer)
+            expert_out = buffer_out.view(self.num_experts * actual_cap, flat_dim).index_select(0, active_buffer_idx)
+            active_outputs.index_copy_(0, active_positions, expert_out)
 
         weights = route.combine_weights.view(-1)
         output = (active_outputs * weights.unsqueeze(-1)).view(num_tokens, top_k, flat_dim)

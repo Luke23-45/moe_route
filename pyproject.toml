@@ -13,6 +13,7 @@ dependencies = [
   "tokenizers>=0.19",
   "torch>=2.3",
   "tqdm>=4.66",
+  "triton>=2.2.0; sys_platform != 'win32'",
 ]
 
 [project.optional-dependencies]

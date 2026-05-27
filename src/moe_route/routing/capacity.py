@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 import torch
+from moe_route.routing.kernels import HAS_TRITON, enforce_capacity_triton
 
 
 @dataclass(frozen=True)
@@ -31,6 +32,9 @@ class CapacityPolicy:
         flat = expert_indices.reshape(-1)
         device = flat.device
         capacity = self.capacity(expert_indices.shape[0], device)
+
+        if HAS_TRITON and device.type == 'cuda':
+            return enforce_capacity_triton(expert_indices, capacity, self.drop_tokens)
 
         raw_load = torch.bincount(flat, minlength=self.num_experts)
 
