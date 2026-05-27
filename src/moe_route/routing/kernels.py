@@ -39,36 +39,31 @@ if HAS_TRITON:
         mask = offsets < num_tokens
 
         # Load the expert index for each token in this block
-        expert_idx = tl.load(expert_indices_ptr + offsets, mask=mask, other=-1)
+        # other=0 is safe because it's masked out
+        expert_idx = tl.load(expert_indices_ptr + offsets, mask=mask, other=0)
         
-        # We need to atomically increment the count for the assigned expert to get a unique rank
-        # Since Triton doesn't natively support atomic_add returning the *old* value in all backends seamlessly,
-        # we do a loop or just rely on atomic_add behavior if supported.
-        # Actually, tl.atomic_add returns the old value!
-        token_rank = tl.zeros([BLOCK_SIZE], dtype=tl.int32)
+        # Atomically increment the count for the assigned expert to get a unique rank
+        # This gives each token its rank for its assigned expert.
+        token_rank = tl.atomic_add(raw_load_ptr + expert_idx, 1, mask=mask)
         
-        for i in range(BLOCK_SIZE):
-            if offsets[i] < num_tokens:
-                e_idx = tl.load(expert_indices_ptr + offsets[i])
-                # Atomically add 1 to the raw load for this expert
-                old_rank = tl.atomic_add(raw_load_ptr + e_idx, 1)
-                
-                # We can't easily write to a tensor from inside this scalar loop directly,
-                # but we can write directly to global memory for the token_rank.
-                tl.store(token_ranks_ptr + offsets[i], old_rank)
-                
-                cap = tl.load(capacity_ptr + e_idx)
-                is_valid = True
-                if drop_tokens:
-                    if old_rank >= cap:
-                        is_valid = False
-                        tl.atomic_add(overflow_counts_ptr + e_idx, 1)
-                
-                if is_valid:
-                    tl.atomic_add(accepted_counts_ptr + e_idx, 1)
-                    tl.store(valid_mask_ptr + offsets[i], 1)
-                else:
-                    tl.store(valid_mask_ptr + offsets[i], 0)
+        # Store the rank
+        tl.store(token_ranks_ptr + offsets, token_rank, mask=mask)
+        
+        # Load capacities for the assigned experts
+        cap = tl.load(capacity_ptr + expert_idx, mask=mask, other=0)
+        
+        if drop_tokens:
+            is_valid = token_rank < cap
+            is_overflow = token_rank >= cap
+            
+            tl.atomic_add(overflow_counts_ptr + expert_idx, 1, mask=mask & is_overflow)
+        else:
+            is_valid = token_rank >= 0  # Always true
+            
+        tl.atomic_add(accepted_counts_ptr + expert_idx, 1, mask=mask & is_valid)
+        
+        # Store valid mask (cast to int8 as it corresponds to torch.bool)
+        tl.store(valid_mask_ptr + offsets, is_valid.to(tl.int8), mask=mask)
 
 def enforce_capacity_triton(expert_indices: torch.Tensor, capacity: torch.Tensor, drop_tokens: bool):
     """
